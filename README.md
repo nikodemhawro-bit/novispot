@@ -32,3 +32,13 @@ flutter build linux --release
 ## License
 
 Novispot is licensed under the MIT License. See [LICENSE](LICENSE).
+
+## Linux installation
+
+Download the latest `Novispot-Linux-x64.tar.gz` from [GitHub Releases](https://github.com/nikodemhawro-bit/novispot/releases). Extract the archive, open the `Novispot` directory and run:
+
+```sh
+./install.sh
+```
+
+Novispot will appear in your application menu. To uninstall it, run `./uninstall.sh` from the extracted directory. Your music, settings and saved credentials are preserved.
