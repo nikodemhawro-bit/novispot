@@ -44,6 +44,11 @@ dependencies:
   metadata_god: ^1.1.0
   flutter_rust_bridge: 2.11.1
 
+  os_media_controls:
+    git:
+      url: https://github.com/edde746/media_controls.git
+  desktop_multi_window: ^0.3.1
+  window_manager: ^0.6.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

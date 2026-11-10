@@ -472,6 +472,48 @@ class _LyricsScreenState extends State<LyricsScreen> {
     );
   }
 
+  Widget _characterKaraoke(
+    String text,
+    int lineIndex,
+    Duration position,
+  ) {
+    if (text.isEmpty) {
+      return const Text('♪', textAlign: TextAlign.center);
+    }
+
+    final start = lines[lineIndex].time;
+
+    final lineDuration = lineIndex + 1 < lines.length
+        ? lines[lineIndex + 1].time - start
+        : const Duration(seconds: 3);
+
+    final elapsed = position - start;
+
+    final progress = (elapsed.inMicroseconds /
+            lineDuration.inMicroseconds)
+        .clamp(0.0, 1.0);
+
+    final glow = 1.0 - progress;
+
+    return Text(
+      text,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        color: Colors.white,
+        shadows: [
+          Shadow(
+            color: Colors.white.withValues(alpha: glow * 0.30),
+            blurRadius: 5 + glow * 6,
+          ),
+          Shadow(
+            color: Colors.white.withValues(alpha: glow * 0.12),
+            blurRadius: glow * 12,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _lyricsView() {
     if (loading) {
       return Center(
@@ -578,10 +620,16 @@ class _LyricsScreenState extends State<LyricsScreen> {
                   fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
                   letterSpacing: isActive ? -0.5 : 0,
                 ),
-                child: Text(
-                  lines[index].text.isEmpty ? '♪' : lines[index].text,
-                  textAlign: TextAlign.center,
-                ),
+                child: isActive
+                    ? _characterKaraoke(
+                        lines[index].text,
+                        index,
+                        snapshot.data ?? Duration.zero,
+                      )
+                    : Text(
+                        lines[index].text.isEmpty ? '♪' : lines[index].text,
+                        textAlign: TextAlign.center,
+                      ),
               ),
             );
           },

@@ -1,5 +1,7 @@
 #define MyAppName "Novispot"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppExeName "novispot.exe"
 
 [Setup]
@@ -12,8 +14,8 @@ DefaultGroupName=Novispot
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
+OutputBaseFilename=Novispot-Setup-{#MyAppVersion}
 OutputDir=..\..\dist
-OutputBaseFilename=Novispot-Setup-1.0.0
 SetupIconFile=..\..\windows\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\novispot.exe
 WizardStyle=modern

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'dart:typed_data';
 
 import 'services/listening_stats_service.dart';
 import 'features/stats/stats_screen.dart';
@@ -16,11 +17,15 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
+import 'package:os_media_controls/os_media_controls.dart';
+import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'services/navidrome_service.dart';
 import 'services/music_player_service.dart';
 
 import 'features/lyrics/lyrics_screen.dart';
+import 'features/player/mini_player_window.dart';
 
 bool metadataGodReady = false;
 
@@ -90,6 +95,14 @@ ThemeData buildNovispotTheme(String selectedTheme) {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (Platform.isLinux) {
+    final windowController = await WindowController.fromCurrentEngine();
+    if (windowController.arguments == 'novispot-mini-player') {
+      runApp(MiniPlayerWindow(controller: windowController));
+      return;
+    }
+  }
 
   try {
     await MetadataGod.initialize();
@@ -519,8 +532,11 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _playlistCloudAnimation;
   int page = 0;
+  int librarySource = 0; // 0 = Lokalna, 1 = Navidrome
   String search = '';
 
   NavidromeService? service;
@@ -539,6 +555,8 @@ class _MainScreenState extends State<MainScreen> {
   Map<String, dynamic>? selectedPlaylist;
 
   final MusicPlayerService musicPlayer = MusicPlayerService();
+  WindowController? _miniPlayerController;
+  DateTime? _lastMiniPlayerSync;
 
   List<dynamic> queue = [];
   int currentIndex = -1;
@@ -559,6 +577,13 @@ class _MainScreenState extends State<MainScreen> {
   StreamSubscription<PlayerState>? stateSubscription;
 
   bool isActuallyPlaying = false;
+
+  StreamSubscription<MediaControlEvent>? mediaControlSubscription;
+  StreamSubscription<Duration?>? mediaDurationSubscription;
+
+  Duration currentMediaPosition = Duration.zero;
+  Duration? currentMediaDuration;
+  DateTime? lastMediaStateUpdateAt;
   Duration? lastPosition;
   int pendingMilliseconds = 0;
 
@@ -568,6 +593,41 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    if (Platform.isLinux) {
+      miniPlayerCommandChannel.setMethodCallHandler((call) async {
+        switch (call.method) {
+          case 'requestState':
+            unawaited(syncMiniPlayer(force: true));
+            return true;
+          case 'playPause':
+            if (isActuallyPlaying) {
+              await musicPlayer.pause();
+            } else {
+              await musicPlayer.resume();
+            }
+            return true;
+          case 'next':
+            await nextSong();
+            return true;
+          case 'previous':
+            await previousSong();
+            return true;
+          case 'seek':
+            final value = call.arguments;
+            if (value is num) {
+              await musicPlayer.seek(Duration(milliseconds: value.round()));
+            }
+            return true;
+          default:
+            return null;
+        }
+      });
+    }
+    initMediaControls();
+    _playlistCloudAnimation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3200),
+    )..repeat(reverse: true);
     createService();
     loadLocalTracks();
     refreshLiked();
@@ -596,9 +656,147 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     isActuallyPlaying = playing;
+    unawaited(updateMediaPlaybackState(force: true));
+    unawaited(syncMiniPlayer(force: true));
+  }
+
+  Future<void> initMediaControls() async {
+    try {
+      await OsMediaControls.enableControls([
+        MediaControl.play,
+        MediaControl.pause,
+        MediaControl.next,
+        MediaControl.previous,
+        MediaControl.seek,
+      ]);
+
+      mediaControlSubscription = OsMediaControls.controlEvents.listen(
+        (event) {
+          if (event is PlayEvent) {
+            unawaited(musicPlayer.resume());
+          } else if (event is PauseEvent) {
+            unawaited(musicPlayer.pause());
+          } else if (event is TogglePlayPauseEvent) {
+            if (isActuallyPlaying) {
+              unawaited(musicPlayer.pause());
+            } else {
+              unawaited(musicPlayer.resume());
+            }
+          } else if (event is NextTrackEvent) {
+            unawaited(nextSong());
+          } else if (event is PreviousTrackEvent) {
+            unawaited(previousSong());
+          } else if (event is SeekEvent) {
+            currentMediaPosition = event.position;
+            unawaited(musicPlayer.seek(event.position));
+            unawaited(
+              updateMediaPlaybackState(position: event.position, force: true),
+            );
+          } else if (event is StopEvent) {
+            unawaited(musicPlayer.stop());
+          }
+        },
+        onError: (error) {
+          debugPrint('Novispot MPRIS event error: $error');
+        },
+      );
+
+      mediaDurationSubscription = musicPlayer.durationStream.listen((duration) {
+        currentMediaDuration = duration;
+        unawaited(updateMediaMetadata());
+        unawaited(syncMiniPlayer(force: true));
+      });
+
+      debugPrint('Novispot: system media controls initialized.');
+    } catch (e) {
+      debugPrint('Novispot MPRIS initialization error: $e');
+    }
+  }
+
+  Future<void> updateMediaMetadata() async {
+    final song = currentSong;
+    if (song == null) return;
+
+    try {
+      final title = song['title']?.toString().trim();
+      final artist = song['artist']?.toString().trim();
+      final album = song['album']?.toString().trim();
+
+      Uint8List? artworkBytes;
+      String? artworkUrl;
+
+      final localCover = song['coverPath']?.toString() ?? '';
+
+      if (localCover.isNotEmpty) {
+        final coverFile = File(localCover);
+        if (await coverFile.exists()) {
+          artworkBytes = await coverFile.readAsBytes();
+        }
+      }
+
+      if (artworkBytes == null) {
+        final coverId =
+            song['coverArt']?.toString() ?? song['coverId']?.toString() ?? '';
+
+        if (coverId.isNotEmpty && service != null) {
+          artworkUrl = service!.getCoverArtUrl(coverId).toString();
+        }
+      }
+
+      await OsMediaControls.setMetadata(
+        MediaMetadata(
+          title: title == null || title.isEmpty ? 'Novispot' : title,
+          artist: artist,
+          album: album,
+          duration: currentMediaDuration,
+          artwork: artworkBytes,
+          artworkUrl: artworkUrl,
+        ),
+      );
+    } catch (e) {
+      debugPrint('Novispot MPRIS metadata error: $e');
+    }
+  }
+
+  Future<void> updateMediaPlaybackState({
+    Duration? position,
+    bool force = false,
+  }) async {
+    if (currentSong == null) return;
+
+    final now = DateTime.now();
+
+    if (!force &&
+        lastMediaStateUpdateAt != null &&
+        now.difference(lastMediaStateUpdateAt!) < const Duration(seconds: 2)) {
+      return;
+    }
+
+    lastMediaStateUpdateAt = now;
+
+    if (position != null) {
+      currentMediaPosition = position;
+    }
+
+    try {
+      await OsMediaControls.setPlaybackState(
+        MediaPlaybackState(
+          state: isActuallyPlaying
+              ? PlaybackState.playing
+              : PlaybackState.paused,
+          position: currentMediaPosition,
+          speed: isActuallyPlaying ? 1.0 : 0.0,
+        ),
+      );
+    } catch (e) {
+      debugPrint('Novispot MPRIS playback state error: $e');
+    }
   }
 
   void handleListeningPosition(Duration position) {
+    currentMediaPosition = position;
+    unawaited(updateMediaPlaybackState(position: position));
+    unawaited(syncMiniPlayer());
     if (!isActuallyPlaying || currentSong == null) {
       lastPosition = position;
       return;
@@ -662,6 +860,82 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  Future<void> openMiniPlayer() async {
+    if (!Platform.isLinux) return;
+
+    try {
+      if (_miniPlayerController == null) {
+        final windows = await WindowController.getAll();
+
+        for (final window in windows) {
+          if (window.arguments == 'novispot-mini-player') {
+            _miniPlayerController = window;
+            break;
+          }
+        }
+      }
+
+      _miniPlayerController ??= await WindowController.create(
+        const WindowConfiguration(
+          hiddenAtLaunch: true,
+          arguments: 'novispot-mini-player',
+        ),
+      );
+
+      await _miniPlayerController!.show();
+      await syncMiniPlayer(force: true);
+    } catch (e) {
+      debugPrint('Novispot Mini Player error: $e');
+      _miniPlayerController = null;
+    }
+  }
+
+  Future<void> syncMiniPlayer({bool force = false}) async {
+    if (!Platform.isLinux || _miniPlayerController == null) return;
+
+    final now = DateTime.now();
+    if (!force &&
+        _lastMiniPlayerSync != null &&
+        now.difference(_lastMiniPlayerSync!) <
+            const Duration(milliseconds: 450)) {
+      return;
+    }
+    _lastMiniPlayerSync = now;
+
+    final song = currentSong;
+    String? coverUrl;
+    String? coverPath;
+
+    if (song != null) {
+      if (song['source'] == 'local') {
+        coverPath = song['coverPath']?.toString();
+      } else {
+        final coverId = song['coverArt']?.toString();
+        if (coverId != null && coverId.isNotEmpty && service != null) {
+          coverUrl = service!.getCoverArtUrl(coverId).toString();
+        }
+      }
+    }
+
+    final payload = <String, dynamic>{
+      'title': song?['title']?.toString() ?? '',
+      'artist': song?['artist']?.toString() ?? '',
+      'album': song?['album']?.toString() ?? '',
+      'coverUrl': coverUrl,
+      'coverPath': coverPath,
+      'playing': isActuallyPlaying,
+      'positionMs': currentMediaPosition.inMilliseconds,
+      'durationMs': currentMediaDuration?.inMilliseconds ?? 0,
+    };
+
+    try {
+      await _miniPlayerController!.invokeMethod('updateState', payload);
+    } catch (e) {
+      debugPrint('Novispot Mini Player sync error: $e');
+      _miniPlayerController = null;
+    }
+  }
+
   void createService() {
     if (!hasNavidrome) {
       service = null;
@@ -681,9 +955,14 @@ class _MainScreenState extends State<MainScreen> {
     completionSubscription?.cancel();
     positionSubscription?.cancel();
     stateSubscription?.cancel();
+    mediaControlSubscription?.cancel();
+    mediaDurationSubscription?.cancel();
+
+    unawaited(OsMediaControls.clear());
 
     unawaited(flushListeningTime(resetRemainder: true));
     unawaited(musicPlayer.dispose());
+    _playlistCloudAnimation.dispose();
 
     super.dispose();
   }
@@ -1114,6 +1393,7 @@ class _MainScreenState extends State<MainScreen> {
       currentIndex = index;
       currentSong = Map<String, dynamic>.from(song as Map);
     });
+    unawaited(syncMiniPlayer(force: true));
 
     try {
       if (song['source'] == 'local') {
@@ -1127,6 +1407,10 @@ class _MainScreenState extends State<MainScreen> {
         }
         await musicPlayer.play(navidrome.getStreamUrl(id).toString());
       }
+
+      currentMediaPosition = Duration.zero;
+      await updateMediaMetadata();
+      await updateMediaPlaybackState(force: true);
     } catch (e) {
       showMessage(
         '${tr('Nie udało się odtworzyć utworu.', 'Could not play this track.')}\n$e',
@@ -1374,30 +1658,7 @@ class _MainScreenState extends State<MainScreen> {
     return Scaffold(
       body: Column(
         children: [
-          SizedBox(
-            height: 54,
-            child: Row(
-              children: [
-                SizedBox(width: 235),
-                Spacer(),
-                IconButton(
-                  tooltip: tr('Ustawienia', 'Settings'),
-                  onPressed: () {
-                    setState(() {
-                      page = 6;
-                      selectedAlbum = null;
-                      selectedPlaylist = null;
-                    });
-                  },
-                  icon: Icon(
-                    Icons.settings_outlined,
-                    color: page == 6 ? primaryText : muted,
-                  ),
-                ),
-                SizedBox(width: 18),
-              ],
-            ),
-          ),
+          const SizedBox(height: 54),
           Expanded(
             child: Row(
               children: [
@@ -1424,25 +1685,62 @@ class _MainScreenState extends State<MainScreen> {
 
     final icons = [
       Icons.home_rounded,
-      Icons.search,
-      Icons.library_music,
-      Icons.favorite_border,
-      Icons.queue_music,
+      Icons.search_rounded,
+      Icons.library_music_rounded,
+      Icons.favorite_border_rounded,
+      Icons.queue_music_rounded,
       Icons.bar_chart_rounded,
     ];
 
     return Container(
       width: 225,
-      color: panel,
-      padding: EdgeInsets.all(24),
+      margin: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: panel,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: dividerColor.withValues(alpha: 0.8),
+          width: 1,
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(17, 25, 17, 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'novispot',
-            style: TextStyle(fontSize: 27, fontWeight: FontWeight.w900),
+          // Logo
+          Padding(
+            padding: const EdgeInsets.only(left: 5, bottom: 38),
+            child: Row(
+              children: [
+                Text(
+                  'novispot',
+                  style: TextStyle(
+                    color: primaryText,
+                    fontSize: 23,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -1.1,
+                  ),
+                ),
+              ],
+            ),
           ),
-          SizedBox(height: 40),
+
+          // Naglowek
+          Padding(
+            padding: const EdgeInsets.only(left: 11, bottom: 12),
+            child: Text(
+              tr('NAWIGACJA', 'NAVIGATION'),
+              style: TextStyle(
+                color: muted,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+
+          // Nawigacja
           for (int i = 0; i < labels.length; i++)
             _NavItem(
               icon: icons[i],
@@ -1456,14 +1754,86 @@ class _MainScreenState extends State<MainScreen> {
                 });
               },
             ),
-          Spacer(),
-          Divider(color: dividerColor),
-          Text(
-            widget.username.isEmpty
-                ? tr('Muzyka lokalna', 'Local music')
-                : widget.username,
-            style: TextStyle(color: muted, fontSize: 11),
-            overflow: TextOverflow.ellipsis,
+
+          const Spacer(),
+
+          Divider(color: dividerColor.withValues(alpha: 0.7), height: 25),
+
+          // Uzytkownik i ustawienia
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 7),
+            decoration: BoxDecoration(
+              color: surface.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: surface,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    widget.username.isEmpty
+                        ? Icons.library_music_rounded
+                        : Icons.person_outline_rounded,
+                    color: muted,
+                    size: 19,
+                  ),
+                ),
+                const SizedBox(width: 9),
+
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.username.isEmpty
+                            ? tr('Muzyka lokalna', 'Local music')
+                            : widget.username,
+                        style: TextStyle(
+                          color: primaryText,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        tr('Twoja kolekcja', 'Your collection'),
+                        style: TextStyle(color: muted, fontSize: 9),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(width: 3),
+
+                IconButton(
+                  tooltip: tr('Ustawienia', 'Settings'),
+                  onPressed: () {
+                    setState(() {
+                      page = 6;
+                      selectedAlbum = null;
+                      selectedPlaylist = null;
+                    });
+                  },
+                  icon: Icon(
+                    Icons.settings_outlined,
+                    color: page == 6 ? primaryText : muted,
+                    size: 20,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 34,
+                    height: 34,
+                  ),
+                  splashRadius: 18,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -2130,74 +2500,143 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget libraryPage() {
+    final isLocal = librarySource == 0;
+
+    Widget sourceTab(int index, String label, IconData icon) {
+      final selected = librarySource == index;
+
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () {
+            setState(() {
+              librarySource = index;
+            });
+          },
+          child: AnimatedContainer(
+            duration: Duration(milliseconds: 220),
+            curve: Curves.easeInOut,
+            padding: EdgeInsets.symmetric(vertical: 13),
+            decoration: BoxDecoration(
+              color: selected ? primaryText : Colors.transparent,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 17, color: selected ? Colors.black : muted),
+                SizedBox(width: 9),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected ? Colors.black : muted,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return ListView(
       padding: EdgeInsets.all(38),
       children: [
         heading(
-          tr('Twoja biblioteka', 'Your Library'),
+          tr("Twoja biblioteka", "Your Library"),
           tr(
-            'Muzyka lokalna oraz kolekcja z Navidrome.',
-            'Local music and your Navidrome collection.',
+            "Wybierz bibliotekę, z której chcesz słuchać.",
+            "Choose the library you want to listen to.",
           ),
         ),
-        SizedBox(height: 22),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            FilledButton.icon(
-              onPressed: addLocalFiles,
-              icon: Icon(Icons.audio_file_outlined),
-              label: Text(tr('Dodaj pliki', 'Add files')),
-              style: FilledButton.styleFrom(
-                backgroundColor: primaryText,
-                foregroundColor: Colors.black,
-              ),
-            ),
-            OutlinedButton.icon(
-              onPressed: addLocalFolder,
-              icon: Icon(Icons.folder_open_outlined),
-              label: Text(tr('Dodaj folder', 'Add folder')),
-            ),
-          ],
+        SizedBox(height: 24),
+
+        Container(
+          padding: EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.045),
+            borderRadius: BorderRadius.circular(19),
+            border: Border.all(color: dividerColor),
+          ),
+          child: Row(
+            children: [
+              sourceTab(0, tr("Lokalne", "Local"), Icons.folder_open_outlined),
+              sourceTab(1, "Navidrome", Icons.dns_outlined),
+            ],
+          ),
         ),
+
         SizedBox(height: 28),
-        Text(
-          tr(
-            'MUZYKA LOKALNA  •  ${localTracks.length} UTWORÓW',
-            'LOCAL MUSIC  •  ${localTracks.length} TRACKS',
+
+        if (isLocal) ...[
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: addLocalFiles,
+                icon: Icon(Icons.audio_file_outlined),
+                label: Text(tr("Dodaj pliki", "Add files")),
+                style: FilledButton.styleFrom(
+                  backgroundColor: primaryText,
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: addLocalFolder,
+                icon: Icon(Icons.folder_open_outlined),
+                label: Text(tr("Dodaj folder", "Add folder")),
+              ),
+            ],
           ),
-          style: TextStyle(
-            color: muted,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.4,
-          ),
-        ),
-        SizedBox(height: 10),
-        if (localTracks.isEmpty)
+          SizedBox(height: 28),
           Text(
             tr(
-              'Nie dodano jeszcze plików. Wybierz pliki audio albo cały folder.',
-              'No files added yet. Choose audio files or an entire folder.',
+              "MUZYKA LOKALNA  •  ${localTracks.length} UTWORÓW",
+              "LOCAL MUSIC  •  ${localTracks.length} TRACKS",
             ),
-            style: TextStyle(color: muted),
-          )
-        else
-          ...localTracks.map((song) => songTile(song, localTracks)),
-        if (service != null) ...[
-          SizedBox(height: 30),
-          Divider(color: dividerColor),
-          SizedBox(height: 22),
-          heading(
-            tr('Navidrome', 'Navidrome'),
-            tr(
-              'Albumy z podłączonego serwera.',
-              'Albums from your connected server.',
+            style: TextStyle(
+              color: muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.4,
             ),
           ),
-          SizedBox(height: 20),
-          albumGrid(),
+          SizedBox(height: 10),
+          if (localTracks.isEmpty)
+            Text(
+              tr(
+                "Nie dodano jeszcze plików. Wybierz pliki audio albo cały folder.",
+                "No files added yet. Choose audio files or an entire folder.",
+              ),
+              style: TextStyle(color: muted),
+            )
+          else
+            ...localTracks.map((song) => songTile(song, localTracks)),
+        ] else ...[
+          if (service != null) ...[
+            heading(
+              tr("Twoje albumy", "Your albums"),
+              tr(
+                "Kolekcja z podłączonego serwera Navidrome.",
+                "Your connected Navidrome server collection.",
+              ),
+            ),
+            SizedBox(height: 20),
+            albumGrid(),
+          ] else
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Text(
+                tr(
+                  "Nie masz podłączonego serwera Navidrome. Dodaj go w Ustawieniach.",
+                  "No Navidrome server connected. Add one in Settings.",
+                ),
+                style: TextStyle(color: muted),
+              ),
+            ),
         ],
       ],
     );
@@ -2366,6 +2805,60 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  Widget _playlistCloudCoverWidget(dynamic playlist) {
+    return FutureBuilder<File?>(
+      future: _getLocalPlaylistCover(playlist),
+      builder: (context, snapshot) {
+        final file = snapshot.data;
+        return AnimatedBuilder(
+          animation: _playlistCloudAnimation,
+          builder: (context, child) {
+            final progress = Curves.easeInOut.transform(
+              _playlistCloudAnimation.value,
+            );
+            return Container(
+              width: 164,
+              height: 164,
+              decoration: BoxDecoration(
+                color: surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.35 + progress * 0.45),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.white.withOpacity(0.06 + progress * 0.12),
+                    blurRadius: 12 + progress * 12,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: EdgeInsets.all(2),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(13),
+                  child: SizedBox.expand(
+                    child: file == null
+                        ? Container(
+                            color: surface,
+                            child: Icon(
+                              Icons.queue_music,
+                              size: 48,
+                              color: primaryText,
+                            ),
+                          )
+                        : Image.file(file, fit: BoxFit.cover),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> changePlaylistCover() async {
     final playlist = selectedPlaylist;
     if (playlist == null) return;
@@ -2499,7 +2992,16 @@ class _MainScreenState extends State<MainScreen> {
               style: TextButton.styleFrom(alignment: Alignment.centerLeft),
             ),
             SizedBox(height: 18),
-            heading(name, tr('Twoja playlista', 'Your playlist')),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _playlistCloudCoverWidget(playlist),
+                SizedBox(width: 22),
+                Expanded(
+                  child: heading(name, tr('Twoja playlista', 'Your playlist')),
+                ),
+              ],
+            ),
             SizedBox(height: 16),
             Align(
               alignment: Alignment.centerLeft,
@@ -2765,6 +3267,28 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                       ),
                       Spacer(),
+                      if (Platform.isLinux)
+                        IconButton(
+                          tooltip: tr('Otwórz Mini Player', 'Open Mini Player'),
+                          onPressed: openMiniPlayer,
+                          icon: const Icon(
+                            Icons.picture_in_picture_alt_rounded,
+                            size: 22,
+                          ),
+                        )
+                      else
+                        StreamBuilder<PlayerState>(
+                          stream: musicPlayer.playerStateStream,
+                          initialData: PlayerState.stopped,
+                          builder: (context, snapshot) {
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 12),
+                              child: _MiniAudioVisualizer(
+                                isPlaying: snapshot.data == PlayerState.playing,
+                              ),
+                            );
+                          },
+                        ),
                       IconButton(
                         tooltip: tr('Tekst utworu', 'Lyrics'),
                         onPressed: currentSong == null
@@ -3476,6 +4000,12 @@ class _NavItemState extends State<_NavItem> {
   Widget build(BuildContext context) {
     final active = widget.selected;
 
+    final background = active
+        ? surface
+        : hovered
+        ? surface.withOpacity(0.55)
+        : Colors.transparent;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 5),
       child: MouseRegion(
@@ -3486,14 +4016,20 @@ class _NavItemState extends State<_NavItem> {
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
           decoration: BoxDecoration(
-            color: active || hovered ? surface : Colors.transparent,
-            borderRadius: BorderRadius.circular(11),
+            color: background,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: active
+                  ? primaryText.withOpacity(0.07)
+                  : Colors.transparent,
+              width: 1,
+            ),
           ),
           child: Material(
             color: Colors.transparent,
             child: InkWell(
               onTap: widget.onTap,
-              borderRadius: BorderRadius.circular(11),
+              borderRadius: BorderRadius.circular(12),
               splashColor: Colors.transparent,
               highlightColor: Colors.transparent,
               child: Padding(
@@ -3512,7 +4048,7 @@ class _NavItemState extends State<_NavItem> {
                         borderRadius: BorderRadius.circular(5),
                       ),
                     ),
-                    const SizedBox(width: 11),
+                    const SizedBox(width: 9),
                     Icon(
                       widget.icon,
                       size: 19,
@@ -3524,11 +4060,11 @@ class _NavItemState extends State<_NavItem> {
                         widget.label,
                         style: TextStyle(
                           color: active || hovered ? primaryText : muted,
-                          fontSize: 13.5,
+                          fontSize: 13,
                           fontWeight: active
                               ? FontWeight.w600
                               : FontWeight.w500,
-                          letterSpacing: -0.2,
+                          letterSpacing: -0.15,
                         ),
                       ),
                     ),
@@ -3579,5 +4115,150 @@ class _HoverCardState extends State<_HoverCard> {
         ),
       ),
     );
+  }
+}
+
+class _PlaylistCloudClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final w = size.width;
+    final h = size.height;
+    return Path()
+      ..moveTo(w * 0.18, h * 0.79)
+      ..cubicTo(w * 0.06, h * 0.78, w * 0.01, h * 0.66, w * 0.06, h * 0.54)
+      ..cubicTo(w * 0.09, h * 0.44, w * 0.18, h * 0.39, w * 0.29, h * 0.40)
+      ..cubicTo(w * 0.31, h * 0.19, w * 0.49, h * 0.08, w * 0.64, h * 0.20)
+      ..cubicTo(w * 0.72, h * 0.25, w * 0.75, h * 0.34, w * 0.76, h * 0.40)
+      ..cubicTo(w * 0.91, h * 0.35, w * 1.00, h * 0.47, w * 0.98, h * 0.62)
+      ..cubicTo(w * 0.97, h * 0.76, w * 0.87, h * 0.83, w * 0.75, h * 0.82)
+      ..cubicTo(w * 0.57, h * 0.91, w * 0.35, h * 0.89, w * 0.18, h * 0.79)
+      ..close();
+  }
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+class _MiniAudioVisualizer extends StatefulWidget {
+  final bool isPlaying;
+
+  const _MiniAudioVisualizer({required this.isPlaying});
+
+  @override
+  State<_MiniAudioVisualizer> createState() => _MiniAudioVisualizerState();
+}
+
+class _MiniAudioVisualizerState extends State<_MiniAudioVisualizer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animation;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _animation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 950),
+    );
+
+    if (widget.isPlaying) {
+      _animation.repeat();
+    } else {
+      _animation.value = 0.15;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _MiniAudioVisualizer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.isPlaying != oldWidget.isPlaying) {
+      if (widget.isPlaying) {
+        _animation.repeat();
+      } else {
+        _animation.stop();
+        _animation.value = 0.15;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 42,
+      height: 38,
+      child: AnimatedBuilder(
+        animation: _animation,
+        builder: (context, child) {
+          return CustomPaint(
+            painter: _MiniVisualizerPainter(
+              phase: _animation.value,
+              active: widget.isPlaying,
+              color: primaryText,
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MiniVisualizerPainter extends CustomPainter {
+  final double phase;
+  final bool active;
+  final Color color;
+
+  _MiniVisualizerPainter({
+    required this.phase,
+    required this.active,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const count = 9;
+    const barWidth = 2.6;
+    const gap = 2.0;
+
+    final totalWidth = count * barWidth + (count - 1) * gap;
+    final startX = (size.width - totalWidth) / 2;
+
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.9)
+      ..style = PaintingStyle.fill;
+
+    for (int i = 0; i < count; i++) {
+      final wave = math.sin(phase * math.pi * 2 + i * 0.78);
+      final secondary = math.sin(phase * math.pi * 4 - i * 0.45);
+
+      final amount = active
+          ? 0.18 + ((wave + 1) / 2) * 0.72
+          : 0.25 + (i % 3) * 0.08;
+
+      final height = 5 + amount * (size.height - 7);
+      final x = startX + i * (barWidth + gap);
+      final y = (size.height - height) / 2;
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, y, barWidth, height),
+          const Radius.circular(3),
+        ),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MiniVisualizerPainter oldDelegate) {
+    return oldDelegate.phase != phase ||
+        oldDelegate.active != active ||
+        oldDelegate.color != color;
   }
 }
