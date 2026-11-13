@@ -18,14 +18,12 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
 import 'package:os_media_controls/os_media_controls.dart';
-import 'package:desktop_multi_window/desktop_multi_window.dart';
-import 'package:window_manager/window_manager.dart';
 
 import 'services/navidrome_service.dart';
 import 'services/music_player_service.dart';
 
 import 'features/lyrics/lyrics_screen.dart';
-import 'features/player/mini_player_window.dart';
+import 'features/equalizer/equalizer_panel.dart';
 
 bool metadataGodReady = false;
 
@@ -95,14 +93,6 @@ ThemeData buildNovispotTheme(String selectedTheme) {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  if (Platform.isLinux) {
-    final windowController = await WindowController.fromCurrentEngine();
-    if (windowController.arguments == 'novispot-mini-player') {
-      runApp(MiniPlayerWindow(controller: windowController));
-      return;
-    }
-  }
 
   try {
     await MetadataGod.initialize();
@@ -537,6 +527,8 @@ class _MainScreenState extends State<MainScreen>
   late final AnimationController _playlistCloudAnimation;
   int page = 0;
   int librarySource = 0; // 0 = Lokalna, 1 = Navidrome
+  bool homeSourceLocal = false;
+  bool homeSourceLoaded = false;
   String search = '';
 
   NavidromeService? service;
@@ -555,8 +547,148 @@ class _MainScreenState extends State<MainScreen>
   Map<String, dynamic>? selectedPlaylist;
 
   final MusicPlayerService musicPlayer = MusicPlayerService();
-  WindowController? _miniPlayerController;
-  DateTime? _lastMiniPlayerSync;
+
+  Timer? sleepTimer;
+  DateTime? sleepTimerEnd;
+  Duration sleepTimerRemaining = Duration.zero;
+
+  void startSleepTimer(int minutes) {
+    sleepTimer?.cancel();
+
+    setState(() {
+      sleepTimerRemaining = Duration(minutes: minutes);
+      sleepTimerEnd = DateTime.now().add(sleepTimerRemaining);
+    });
+
+    sleepTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final end = sleepTimerEnd;
+      if (end == null) {
+        timer.cancel();
+        return;
+      }
+
+      final remaining = end.difference(DateTime.now());
+
+      if (remaining <= Duration.zero) {
+        timer.cancel();
+        if (!mounted) return;
+
+        setState(() {
+          sleepTimer = null;
+          sleepTimerEnd = null;
+          sleepTimerRemaining = Duration.zero;
+        });
+
+        unawaited(musicPlayer.pause());
+        showMessage(
+          tr(
+            'Timer zakończony. Muzyka została zapauzowana.',
+            'Sleep timer finished. Music paused.',
+          ),
+        );
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          sleepTimerRemaining = remaining;
+        });
+      }
+    });
+  }
+
+
+  Future<void> showSleepTimerDialog() async {
+    final controller = TextEditingController();
+    final active = sleepTimerEnd != null;
+    final remaining = sleepTimerRemaining;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(tr('Timer uśpienia', 'Sleep Timer')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (active) ...[
+                Text(
+                  '${tr('Pozostało', 'Remaining')}: '
+                  '${remaining.inMinutes}:'
+                  '${(remaining.inSeconds % 60).toString().padLeft(2, '0')}',
+                ),
+                const SizedBox(height: 16),
+              ],
+              Text(tr('Wybierz czas:', 'Choose duration:')),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final minutes in [5, 10, 15, 20, 30, 45, 60, 90])
+                    OutlinedButton(
+                      onPressed: () {
+                        startSleepTimer(minutes);
+                        Navigator.pop(dialogContext);
+                      },
+                      child: Text('$minutes min'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: tr(
+                    'Własny czas (minuty)',
+                    'Custom time (minutes)',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            if (active)
+              TextButton(
+                onPressed: () {
+                  cancelSleepTimer();
+                  Navigator.pop(dialogContext);
+                },
+                child: Text(tr('Anuluj timer', 'Cancel timer')),
+              ),
+            TextButton(
+              onPressed: () {
+                final minutes = int.tryParse(controller.text.trim());
+                if (minutes == null || minutes <= 0) return;
+
+                startSleepTimer(minutes);
+                Navigator.pop(dialogContext);
+              },
+              child: Text(tr('Ustaw', 'Set')),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(tr('Zamknij', 'Close')),
+            ),
+          ],
+        );
+      },
+    );
+
+    controller.dispose();
+  }
+
+  void cancelSleepTimer() {
+    sleepTimer?.cancel();
+    setState(() {
+      sleepTimer = null;
+      sleepTimerEnd = null;
+      sleepTimerRemaining = Duration.zero;
+    });
+  }
+
 
   List<dynamic> queue = [];
   int currentIndex = -1;
@@ -593,36 +725,7 @@ class _MainScreenState extends State<MainScreen>
   @override
   void initState() {
     super.initState();
-    if (Platform.isLinux) {
-      miniPlayerCommandChannel.setMethodCallHandler((call) async {
-        switch (call.method) {
-          case 'requestState':
-            unawaited(syncMiniPlayer(force: true));
-            return true;
-          case 'playPause':
-            if (isActuallyPlaying) {
-              await musicPlayer.pause();
-            } else {
-              await musicPlayer.resume();
-            }
-            return true;
-          case 'next':
-            await nextSong();
-            return true;
-          case 'previous':
-            await previousSong();
-            return true;
-          case 'seek':
-            final value = call.arguments;
-            if (value is num) {
-              await musicPlayer.seek(Duration(milliseconds: value.round()));
-            }
-            return true;
-          default:
-            return null;
-        }
-      });
-    }
+    loadHomeSource();
     initMediaControls();
     _playlistCloudAnimation = AnimationController(
       vsync: this,
@@ -657,7 +760,6 @@ class _MainScreenState extends State<MainScreen>
 
     isActuallyPlaying = playing;
     unawaited(updateMediaPlaybackState(force: true));
-    unawaited(syncMiniPlayer(force: true));
   }
 
   Future<void> initMediaControls() async {
@@ -704,7 +806,6 @@ class _MainScreenState extends State<MainScreen>
       mediaDurationSubscription = musicPlayer.durationStream.listen((duration) {
         currentMediaDuration = duration;
         unawaited(updateMediaMetadata());
-        unawaited(syncMiniPlayer(force: true));
       });
 
       debugPrint('Novispot: system media controls initialized.');
@@ -796,7 +897,6 @@ class _MainScreenState extends State<MainScreen>
   void handleListeningPosition(Duration position) {
     currentMediaPosition = position;
     unawaited(updateMediaPlaybackState(position: position));
-    unawaited(syncMiniPlayer());
     if (!isActuallyPlaying || currentSong == null) {
       lastPosition = position;
       return;
@@ -860,82 +960,6 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  Future<void> openMiniPlayer() async {
-    if (!Platform.isLinux) return;
-
-    try {
-      if (_miniPlayerController == null) {
-        final windows = await WindowController.getAll();
-
-        for (final window in windows) {
-          if (window.arguments == 'novispot-mini-player') {
-            _miniPlayerController = window;
-            break;
-          }
-        }
-      }
-
-      _miniPlayerController ??= await WindowController.create(
-        const WindowConfiguration(
-          hiddenAtLaunch: true,
-          arguments: 'novispot-mini-player',
-        ),
-      );
-
-      await _miniPlayerController!.show();
-      await syncMiniPlayer(force: true);
-    } catch (e) {
-      debugPrint('Novispot Mini Player error: $e');
-      _miniPlayerController = null;
-    }
-  }
-
-  Future<void> syncMiniPlayer({bool force = false}) async {
-    if (!Platform.isLinux || _miniPlayerController == null) return;
-
-    final now = DateTime.now();
-    if (!force &&
-        _lastMiniPlayerSync != null &&
-        now.difference(_lastMiniPlayerSync!) <
-            const Duration(milliseconds: 450)) {
-      return;
-    }
-    _lastMiniPlayerSync = now;
-
-    final song = currentSong;
-    String? coverUrl;
-    String? coverPath;
-
-    if (song != null) {
-      if (song['source'] == 'local') {
-        coverPath = song['coverPath']?.toString();
-      } else {
-        final coverId = song['coverArt']?.toString();
-        if (coverId != null && coverId.isNotEmpty && service != null) {
-          coverUrl = service!.getCoverArtUrl(coverId).toString();
-        }
-      }
-    }
-
-    final payload = <String, dynamic>{
-      'title': song?['title']?.toString() ?? '',
-      'artist': song?['artist']?.toString() ?? '',
-      'album': song?['album']?.toString() ?? '',
-      'coverUrl': coverUrl,
-      'coverPath': coverPath,
-      'playing': isActuallyPlaying,
-      'positionMs': currentMediaPosition.inMilliseconds,
-      'durationMs': currentMediaDuration?.inMilliseconds ?? 0,
-    };
-
-    try {
-      await _miniPlayerController!.invokeMethod('updateState', payload);
-    } catch (e) {
-      debugPrint('Novispot Mini Player sync error: $e');
-      _miniPlayerController = null;
-    }
-  }
-
   void createService() {
     if (!hasNavidrome) {
       service = null;
@@ -964,7 +988,43 @@ class _MainScreenState extends State<MainScreen>
     unawaited(musicPlayer.dispose());
     _playlistCloudAnimation.dispose();
 
+    sleepTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> loadHomeSource() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString("novispot_home_source") ?? "navidrome";
+
+      if (!mounted) return;
+
+      setState(() {
+        homeSourceLocal = saved == "local" || !hasNavidrome;
+        homeSourceLoaded = true;
+      });
+    } catch (e) {
+      debugPrint("Novispot: loadHomeSource failed: $e");
+      if (mounted) {
+        setState(() {
+          homeSourceLocal = !hasNavidrome;
+          homeSourceLoaded = true;
+        });
+      }
+    }
+  }
+
+  Future<void> setHomeSource(String source) async {
+    if (source == "navidrome" && !hasNavidrome) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("novispot_home_source", source);
+
+    if (!mounted) return;
+
+    setState(() {
+      homeSourceLocal = source == "local";
+    });
   }
 
   Future<void> loadLocalTracks() async {
@@ -1393,7 +1453,6 @@ class _MainScreenState extends State<MainScreen>
       currentIndex = index;
       currentSong = Map<String, dynamic>.from(song as Map);
     });
-    unawaited(syncMiniPlayer(force: true));
 
     try {
       if (song['source'] == 'local') {
@@ -1877,7 +1936,11 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Widget homePage() {
-    if (service == null) {
+    if (!homeSourceLoaded && service != null) {
+      return Center(child: CircularProgressIndicator());
+    }
+
+    if (service == null || homeSourceLocal) {
       return ListView(
         padding: EdgeInsets.fromLTRB(36, 30, 36, 42),
         children: [
@@ -2015,111 +2078,142 @@ class _MainScreenState extends State<MainScreen>
 
             InkWell(
               onTap: () => openAlbum(featured),
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(24),
               child: Container(
-                height: 235,
-                padding: EdgeInsets.all(22),
+                height: 330,
                 decoration: BoxDecoration(
                   color: panel,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: dividerColor, width: 0.7),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: dividerColor, width: 0.8),
                 ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            tr(
-                              "ALBUM Z TWOJEJ BIBLIOTEKI",
-                              "FROM YOUR LIBRARY",
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(23),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (featuredCover != null)
+                        Image.network(
+                          service!.getCoverArtUrl(featuredCover).toString(),
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stack) =>
+                              _coverPlaceholder(),
+                        )
+                      else
+                        _coverPlaceholder(),
+
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.05),
+                              Colors.black.withValues(alpha: 0.25),
+                              Colors.black.withValues(alpha: 0.92),
+                            ],
+                            stops: [0.0, 0.42, 1.0],
+                          ),
+                        ),
+                      ),
+
+                      Positioned(
+                        top: 19,
+                        left: 19,
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 13,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            borderRadius: BorderRadius.circular(30),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.2),
                             ),
+                          ),
+                          child: Text(
+                            tr("WYBRANE DLA CIEBIE", "FEATURED FOR YOU"),
                             style: TextStyle(
-                              color: muted,
+                              color: Colors.white,
                               fontSize: 10,
                               fontWeight: FontWeight.bold,
-                              letterSpacing: 1.5,
+                              letterSpacing: 1.3,
                             ),
                           ),
-                          SizedBox(height: 15),
-                          Text(
-                            featuredTitle,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 25,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: -0.6,
-                            ),
-                          ),
-                          if (featuredArtist.isNotEmpty) ...[
-                            SizedBox(height: 7),
+                        ),
+                      ),
+
+                      Positioned(
+                        left: 24,
+                        right: 24,
+                        bottom: 23,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                             Text(
-                              featuredArtist,
-                              maxLines: 1,
+                              featuredTitle,
+                              maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: muted, fontSize: 14),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 29,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: -0.8,
+                                height: 1.08,
+                              ),
+                            ),
+                            if (featuredArtist.isNotEmpty) ...[
+                              SizedBox(height: 7),
+                              Text(
+                                featuredArtist,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.78),
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                            SizedBox(height: 15),
+                            Container(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.play_arrow_rounded,
+                                    size: 19,
+                                    color: Colors.black,
+                                  ),
+                                  SizedBox(width: 5),
+                                  Text(
+                                    tr("Otwórz album", "Open album"),
+                                    style: TextStyle(
+                                      color: Colors.black,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
-                          SizedBox(height: 18),
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 17,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color: primaryText,
-                              borderRadius: BorderRadius.circular(30),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.play_arrow_rounded,
-                                  size: 19,
-                                  color: bg,
-                                ),
-                                SizedBox(width: 5),
-                                Text(
-                                  tr("Otwórz album", "Open album"),
-                                  style: TextStyle(
-                                    color: bg,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
-                    SizedBox(width: 18),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(13),
-                      child: SizedBox(
-                        width: 180,
-                        height: 180,
-                        child: featuredCover == null
-                            ? _coverPlaceholder()
-                            : Image.network(
-                                service!
-                                    .getCoverArtUrl(featuredCover)
-                                    .toString(),
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stack) =>
-                                    _coverPlaceholder(),
-                              ),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
 
-            SizedBox(height: 38),
+            SizedBox(height: 46),
 
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2138,10 +2232,10 @@ class _MainScreenState extends State<MainScreen>
                 ),
               ],
             ),
-            SizedBox(height: 19),
+            SizedBox(height: 23),
 
             SizedBox(
-              height: 245,
+              height: 285,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: albums.length,
@@ -2233,15 +2327,15 @@ class _MainScreenState extends State<MainScreen>
     return _HoverCard(
       onTap: () => openAlbum(album),
       child: SizedBox(
-        width: 165,
+        width: 180,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
               child: SizedBox(
-                width: 165,
-                height: 165,
+                width: 180,
+                height: 180,
                 child: coverId == null
                     ? _coverPlaceholder()
                     : Image.network(
@@ -3094,6 +3188,54 @@ class _MainScreenState extends State<MainScreen>
         Divider(color: dividerColor),
         SizedBox(height: 20),
         Text(
+          tr("Źródło ekranu głównego", "Home screen source"),
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: 10),
+        DropdownButton<String>(
+          value: homeSourceLocal ? "local" : "navidrome",
+          dropdownColor: surface,
+          isExpanded: true,
+          items: [
+            DropdownMenuItem(
+              value: "navidrome",
+              enabled: hasNavidrome,
+              child: Text(
+  tr("Navidrome (Zalecane)", "Navidrome (Recommended)"),
+),
+            ),
+            DropdownMenuItem(
+              value: "local",
+              child: Text(tr("Lokalna biblioteka", "Local library")),
+            ),
+          ],
+          onChanged: (value) {
+            if (value != null) setHomeSource(value);
+          },
+        ),
+        if (!hasNavidrome)
+          Text(
+            tr(
+              "Skonfiguruj Navidrome, aby móc wybrać je jako źródło ekranu głównego.",
+              "Configure Navidrome to use it as the home screen source.",
+            ),
+            style: TextStyle(color: muted, fontSize: 12),
+          ),
+        SizedBox(height: 25),
+        Divider(color: dividerColor),
+        SizedBox(height: 20),
+        EqualizerPanel(
+          musicPlayer: musicPlayer,
+          polish: widget.language == "pl",
+          textColor: primaryText,
+          mutedColor: muted,
+          surfaceColor: surface,
+          dividerColor: dividerColor,
+        ),
+        SizedBox(height: 25),
+        Divider(color: dividerColor),
+        SizedBox(height: 20),
+        Text(
           tr('Statystyki słuchania', 'Listening statistics'),
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
@@ -3267,28 +3409,6 @@ class _MainScreenState extends State<MainScreen>
                         ),
                       ),
                       Spacer(),
-                      if (Platform.isLinux)
-                        IconButton(
-                          tooltip: tr('Otwórz Mini Player', 'Open Mini Player'),
-                          onPressed: openMiniPlayer,
-                          icon: const Icon(
-                            Icons.picture_in_picture_alt_rounded,
-                            size: 22,
-                          ),
-                        )
-                      else
-                        StreamBuilder<PlayerState>(
-                          stream: musicPlayer.playerStateStream,
-                          initialData: PlayerState.stopped,
-                          builder: (context, snapshot) {
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 12),
-                              child: _MiniAudioVisualizer(
-                                isPlaying: snapshot.data == PlayerState.playing,
-                              ),
-                            );
-                          },
-                        ),
                       IconButton(
                         tooltip: tr('Tekst utworu', 'Lyrics'),
                         onPressed: currentSong == null
@@ -3381,6 +3501,19 @@ class _MainScreenState extends State<MainScreen>
                         icon: Icon(
                           isLiked ? Icons.favorite : Icons.favorite_border,
                           color: isLiked ? primaryText : muted,
+                        ),
+                      ),
+
+                      IconButton(
+                        tooltip: sleepTimerEnd != null
+                            ? tr('Timer uśpienia – aktywny', 'Sleep timer – active')
+                            : tr('Timer uśpienia', 'Sleep timer'),
+                        onPressed: showSleepTimerDialog,
+                        icon: Icon(
+                          sleepTimerEnd != null
+                              ? Icons.timer_rounded
+                              : Icons.timer_outlined,
+                          color: sleepTimerEnd != null ? primaryText : muted,
                         ),
                       ),
                     ],
@@ -4137,128 +4270,4 @@ class _PlaylistCloudClipper extends CustomClipper<Path> {
 
   @override
   bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
-}
-
-class _MiniAudioVisualizer extends StatefulWidget {
-  final bool isPlaying;
-
-  const _MiniAudioVisualizer({required this.isPlaying});
-
-  @override
-  State<_MiniAudioVisualizer> createState() => _MiniAudioVisualizerState();
-}
-
-class _MiniAudioVisualizerState extends State<_MiniAudioVisualizer>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _animation;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _animation = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 950),
-    );
-
-    if (widget.isPlaying) {
-      _animation.repeat();
-    } else {
-      _animation.value = 0.15;
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _MiniAudioVisualizer oldWidget) {
-    super.didUpdateWidget(oldWidget);
-
-    if (widget.isPlaying != oldWidget.isPlaying) {
-      if (widget.isPlaying) {
-        _animation.repeat();
-      } else {
-        _animation.stop();
-        _animation.value = 0.15;
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _animation.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 42,
-      height: 38,
-      child: AnimatedBuilder(
-        animation: _animation,
-        builder: (context, child) {
-          return CustomPaint(
-            painter: _MiniVisualizerPainter(
-              phase: _animation.value,
-              active: widget.isPlaying,
-              color: primaryText,
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _MiniVisualizerPainter extends CustomPainter {
-  final double phase;
-  final bool active;
-  final Color color;
-
-  _MiniVisualizerPainter({
-    required this.phase,
-    required this.active,
-    required this.color,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const count = 9;
-    const barWidth = 2.6;
-    const gap = 2.0;
-
-    final totalWidth = count * barWidth + (count - 1) * gap;
-    final startX = (size.width - totalWidth) / 2;
-
-    final paint = Paint()
-      ..color = color.withValues(alpha: 0.9)
-      ..style = PaintingStyle.fill;
-
-    for (int i = 0; i < count; i++) {
-      final wave = math.sin(phase * math.pi * 2 + i * 0.78);
-      final secondary = math.sin(phase * math.pi * 4 - i * 0.45);
-
-      final amount = active
-          ? 0.18 + ((wave + 1) / 2) * 0.72
-          : 0.25 + (i % 3) * 0.08;
-
-      final height = 5 + amount * (size.height - 7);
-      final x = startX + i * (barWidth + gap);
-      final y = (size.height - height) / 2;
-
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, y, barWidth, height),
-          const Radius.circular(3),
-        ),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _MiniVisualizerPainter oldDelegate) {
-    return oldDelegate.phase != phase ||
-        oldDelegate.active != active ||
-        oldDelegate.color != color;
-  }
 }

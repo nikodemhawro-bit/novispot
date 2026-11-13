@@ -4,7 +4,6 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_linux
-  desktop_multi_window
   flutter_secure_storage_linux
   os_media_controls
 )

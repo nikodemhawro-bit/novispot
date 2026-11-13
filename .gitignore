@@ -77,3 +77,17 @@ key.properties
 *.wrapped-backup
 
 /packaging/novispot/
+
+
+# Local backups and temporary build files
+*.backup-*
+*.bak-*
+/dist/
+/Novispot-Linux-x64.tar.gz
+/assets/icons/*backup*
+
+# Temporary development scripts
+/add_sleep_timer_ui.py
+/finish_remove_mini_player.py
+/remove_mini_player.py
+/remove_visualizer.py

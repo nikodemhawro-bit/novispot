@@ -1,4 +1,4 @@
-NOVISPOT 1.0.0 — LINUX x64
+NOVISPOT 1.0.1 — LINUX x64
 
 INSTALLATION
 1. Extract the downloaded archive.

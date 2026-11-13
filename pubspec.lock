@@ -169,14 +169,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.8.0"
-  desktop_multi_window:
-    dependency: "direct main"
-    description:
-      name: desktop_multi_window
-      sha256: "6a82209dfd29279258515157e5c08612542ebf7bfb3b55fb1dfcd32c076eea4d"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.3.1"
   fake_async:
     dependency: transitive
     description:
@@ -464,6 +456,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.0"
+  miniaudio_player:
+    dependency: "direct main"
+    description:
+      name: miniaudio_player
+      sha256: "40468732ba29466d0b5d2df26d1dc504ba743a2d545a12a6748f809732840397"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.0.2"
   native_toolchain_c:
     dependency: transitive
     description:
