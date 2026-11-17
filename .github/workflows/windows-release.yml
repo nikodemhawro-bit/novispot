@@ -35,6 +35,8 @@ jobs:
 
       - name: Build Windows application
         shell: pwsh
+        env:
+          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: |
           $version = $env:RELEASE_TAG -replace "^v", ""
           flutter build windows --release --build-name=$version --build-number=1
