@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - "lib/**"
+      - "assets/**"
       - "pubspec.yaml"
       - "pubspec.lock"
       - ".github/workflows/android-build.yml"
@@ -59,11 +60,14 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Generate Novispot Android launcher icons
+        run: dart run flutter_launcher_icons
+
       - name: Analyze Dart code
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build release APK
-        run: flutter build apk --release --build-name=2.0.0 --build-number=1
+        run: flutter build apk --release --build-name=2.0.0 --build-number=2
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
