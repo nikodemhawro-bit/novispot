@@ -477,40 +477,11 @@ class _LyricsScreenState extends State<LyricsScreen> {
     int lineIndex,
     Duration position,
   ) {
-    if (text.isEmpty) {
-      return const Text('♪', textAlign: TextAlign.center);
-    }
-
-    final start = lines[lineIndex].time;
-
-    final lineDuration = lineIndex + 1 < lines.length
-        ? lines[lineIndex + 1].time - start
-        : const Duration(seconds: 3);
-
-    final elapsed = position - start;
-
-    final progress = (elapsed.inMicroseconds /
-            lineDuration.inMicroseconds)
-        .clamp(0.0, 1.0);
-
-    final glow = 1.0 - progress;
-
     return Text(
-      text,
+      text.isEmpty ? '♪' : text,
       textAlign: TextAlign.center,
-      style: TextStyle(
-        color: Colors.white,
-        shadows: [
-          Shadow(
-            color: Colors.white.withValues(alpha: glow * 0.30),
-            blurRadius: 5 + glow * 6,
-          ),
-          Shadow(
-            color: Colors.white.withValues(alpha: glow * 0.12),
-            blurRadius: glow * 12,
-          ),
-        ],
-      ),
+      softWrap: true,
+      style: const TextStyle(color: Colors.white),
     );
   }
 
@@ -569,7 +540,7 @@ class _LyricsScreenState extends State<LyricsScreen> {
 
     if (!synced) {
       return SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 35, vertical: 40),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
         child: Text(
           plainLyrics ?? '',
           textAlign: TextAlign.center,
@@ -592,7 +563,7 @@ class _LyricsScreenState extends State<LyricsScreen> {
         _centerLine(active);
 
         return ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 35, vertical: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 110),
           itemCount: lines.length,
           itemBuilder: (context, index) {
             final isActive = index == active;
@@ -615,10 +586,10 @@ class _LyricsScreenState extends State<LyricsScreen> {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: color,
-                  fontSize: isActive ? 29 : 20,
+                  fontSize: isActive ? 26 : 19,
                   height: 1.35,
                   fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
-                  letterSpacing: isActive ? -0.5 : 0,
+                  letterSpacing: 0,
                 ),
                 child: isActive
                     ? _characterKaraoke(
@@ -681,7 +652,9 @@ class _LyricsScreenState extends State<LyricsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: 1.35,
+      child: Scaffold(
       backgroundColor: const Color(0xFF080808),
       body: Stack(
         fit: StackFit.expand,
@@ -784,6 +757,7 @@ class _LyricsScreenState extends State<LyricsScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
