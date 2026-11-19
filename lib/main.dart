@@ -1801,7 +1801,6 @@ class _MainScreenState extends State<MainScreen>
     final song = currentSong!;
     final title = song['title']?.toString() ?? 'Unknown track';
     final artist = song['artist']?.toString() ?? 'Novispot';
-    final id = song['id']?.toString() ?? '';
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 5, 12, 8),
@@ -1830,67 +1829,67 @@ class _MainScreenState extends State<MainScreen>
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   child: Row(
-                children: [
-                  mobileCover(song, 48),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: primaryText,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          ),
+                    children: [
+                      mobileCover(song, 48),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: primaryText,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: muted, fontSize: 11),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          artist,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: muted, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  StreamBuilder<PlayerState>(
-                    stream: musicPlayer.playerStateStream,
-                    initialData: PlayerState.stopped,
-                    builder: (context, snapshot) {
-                      final playing = snapshot.data == PlayerState.playing;
-                      return IconButton(
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () async {
-                          if (playing) {
-                            await musicPlayer.pause();
-                          } else {
-                            await musicPlayer.resume();
-                          }
+                      ),
+                      StreamBuilder<PlayerState>(
+                        stream: musicPlayer.playerStateStream,
+                        initialData: PlayerState.stopped,
+                        builder: (context, snapshot) {
+                          final playing = snapshot.data == PlayerState.playing;
+                          return IconButton(
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () async {
+                              if (playing) {
+                                await musicPlayer.pause();
+                              } else {
+                                await musicPlayer.resume();
+                              }
+                            },
+                            icon: Icon(
+                              playing
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded,
+                              color: primaryText,
+                              size: 29,
+                            ),
+                          );
                         },
-                        icon: Icon(
-                          playing
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          color: primaryText,
-                          size: 29,
-                        ),
-                      );
-                    },
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: nextSong,
+                        icon: Icon(Icons.skip_next_rounded, color: primaryText),
+                      ),
+                    ],
                   ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    onPressed: nextSong,
-                    icon: Icon(Icons.skip_next_rounded, color: primaryText),
-                  ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -4216,85 +4215,6 @@ class _MobilePlayerAmbientBackgroundState
           ],
         );
       },
-    );
-  }
-}
-
-class _FloatingEqualizer extends StatefulWidget {
-  const _FloatingEqualizer({required this.isPlaying});
-
-  final bool isPlaying;
-
-  @override
-  State<_FloatingEqualizer> createState() => _FloatingEqualizerState();
-}
-
-class _FloatingEqualizerState extends State<_FloatingEqualizer>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  static const _heights = [10.0, 19.0, 13.0, 23.0, 15.0];
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 760),
-    );
-    if (widget.isPlaying) _controller.repeat();
-  }
-
-  @override
-  void didUpdateWidget(covariant _FloatingEqualizer oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isPlaying && !_controller.isAnimating) {
-      _controller.repeat();
-    } else if (!widget.isPlaying && _controller.isAnimating) {
-      _controller.stop();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 27,
-      height: 25,
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: List.generate(_heights.length, (index) {
-              final wave = widget.isPlaying
-                  ? (math.sin((_controller.value * math.pi * 2) +
-                              (index * 0.92)) +
-                          1) /
-                      2
-                  : 0.15;
-              final height = widget.isPlaying
-                  ? 5 + (_heights[index] - 5) * wave
-                  : 5 + (_heights[index] - 5) * 0.15;
-              return Container(
-                width: 3,
-                height: height,
-                margin: const EdgeInsets.symmetric(horizontal: 1.2),
-                decoration: BoxDecoration(
-                  color: primaryText.withValues(alpha: widget.isPlaying ? 1 : 0.55),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              );
-            }),
-          );
-        },
-      ),
     );
   }
 }
