@@ -101,3 +101,9 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+flutter_launcher_icons:
+  android: true
+  image_path: assets/icons/novispot.png
+  adaptive_icon_background: "#101010"
+  adaptive_icon_foreground: assets/icons/novispot.png
