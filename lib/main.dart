@@ -3987,6 +3987,8 @@ class _MainScreenState extends State<MainScreen>
                                           : null,
                                       positionStream:
                                           musicPlayer.positionStream,
+                                      durationStream:
+                                          musicPlayer.durationStream,
                                       polish: pl,
                                     ),
                                   ),
