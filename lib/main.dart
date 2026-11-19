@@ -1821,9 +1821,18 @@ class _MainScreenState extends State<MainScreen>
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(19),
-                  child: _MobilePlayerAmbientBackground(
-                    cover: mobileCover(song, 180),
-                    baseColor: surface,
+                  child: _PlayerBarWaveBackground(
+                    positionStream: musicPlayer.positionStream,
+                    durationStream: musicPlayer.durationStream,
+                    coverUrl: song['source'] == 'local' ||
+                            song['coverArt'] == null ||
+                            service == null
+                        ? null
+                        : service!.getCoverArtUrl(song['coverArt'].toString()).toString(),
+                    coverPath: song['source'] == 'local'
+                        ? song['coverPath']?.toString()
+                        : null,
+                    baseColor: panel,
                   ),
                 ),
                 Padding(
@@ -2110,6 +2119,7 @@ class _MainScreenState extends State<MainScreen>
                                   ? song['coverPath']?.toString()
                                   : null,
                               positionStream: musicPlayer.positionStream,
+                              durationStream: musicPlayer.durationStream,
                               polish: pl,
                             ),
                           ),
