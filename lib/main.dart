@@ -2061,7 +2061,7 @@ class _MainScreenState extends State<MainScreen>
           final id = song['id']?.toString() ?? '';
           final liked = likedIds.contains(id);
           final width = MediaQuery.of(sheetContext).size.width;
-          final coverSize = (width * 0.68).clamp(190.0, 300.0);
+          final coverSize = (width * 0.68).clamp(190.0, 300.0).toDouble();
 
           return Padding(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
@@ -2489,7 +2489,7 @@ class _MainScreenState extends State<MainScreen>
 
     if (service == null || homeSourceLocal) {
       return ListView(
-        padding: EdgeInsets.fromLTRB(36, 30, 36, 42),
+        padding: EdgeInsets.fromLTRB(Platform.isAndroid ? 18 : 36, Platform.isAndroid ? 20 : 30, Platform.isAndroid ? 18 : 36, Platform.isAndroid ? 32 : 42),
         children: [
           Text(
             tr('TWOJA MUZYKA', 'YOUR MUSIC'),
@@ -2553,7 +2553,7 @@ class _MainScreenState extends State<MainScreen>
 
         if (snapshot.hasError) {
           return ListView(
-            padding: EdgeInsets.all(38),
+            padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
             children: [_errorPanel(snapshot.error.toString())],
           );
         }
@@ -2562,7 +2562,7 @@ class _MainScreenState extends State<MainScreen>
 
         if (albums.isEmpty) {
           return ListView(
-            padding: EdgeInsets.all(38),
+            padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
             children: [
               Text(
                 tr("Twoja muzyka", "Your Music"),
@@ -2583,7 +2583,7 @@ class _MainScreenState extends State<MainScreen>
         final featuredCover = featured["coverArt"]?.toString();
 
         return ListView(
-          padding: EdgeInsets.fromLTRB(36, 30, 36, 42),
+          padding: EdgeInsets.fromLTRB(Platform.isAndroid ? 18 : 36, Platform.isAndroid ? 20 : 30, Platform.isAndroid ? 18 : 36, Platform.isAndroid ? 32 : 42),
           children: [
             Text(
               tr("ODKRYWAJ", "LISTEN NOW"),
@@ -2627,7 +2627,7 @@ class _MainScreenState extends State<MainScreen>
               onTap: () => openAlbum(featured),
               borderRadius: BorderRadius.circular(24),
               child: Container(
-                height: 330,
+                height: Platform.isAndroid ? 260 : 330,
                 decoration: BoxDecoration(
                   color: panel,
                   borderRadius: BorderRadius.circular(24),
@@ -2964,7 +2964,7 @@ class _MainScreenState extends State<MainScreen>
         final songs = snapshot.data ?? [];
 
         return ListView(
-          padding: EdgeInsets.all(38),
+          padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
           children: [
             TextButton.icon(
               onPressed: closeDetails,
@@ -3052,7 +3052,7 @@ class _MainScreenState extends State<MainScreen>
 
   Widget searchPage() {
     return Padding(
-      padding: EdgeInsets.all(38),
+      padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3183,7 +3183,7 @@ class _MainScreenState extends State<MainScreen>
     }
 
     return ListView(
-      padding: EdgeInsets.all(38),
+      padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
       children: [
         heading(
           tr("Twoja biblioteka", "Your Library"),
@@ -3374,7 +3374,7 @@ class _MainScreenState extends State<MainScreen>
         final songs = snapshot.data ?? [];
 
         return ListView(
-          padding: EdgeInsets.all(38),
+          padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
           children: [
             heading(
               tr('Polubione utwory', 'Liked Songs'),
@@ -3530,7 +3530,7 @@ class _MainScreenState extends State<MainScreen>
   Widget playlistsPage() {
     if (service == null) {
       return ListView(
-        padding: EdgeInsets.all(38),
+        padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
         children: [
           heading(
             tr('Playlisty', 'Playlists'),
@@ -3553,7 +3553,7 @@ class _MainScreenState extends State<MainScreen>
         final playlists = snapshot.data ?? [];
 
         return ListView(
-          padding: EdgeInsets.all(38),
+          padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
           children: [
             Row(
               children: [
@@ -3624,7 +3624,7 @@ class _MainScreenState extends State<MainScreen>
         final songs = snapshot.data ?? [];
 
         return ListView(
-          padding: EdgeInsets.all(38),
+          padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
           children: [
             TextButton.icon(
               onPressed: closeDetails,
@@ -3686,7 +3686,7 @@ class _MainScreenState extends State<MainScreen>
 
   Widget settingsPage() {
     return ListView(
-      padding: EdgeInsets.all(38),
+      padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
       children: [
         heading(
           tr('Ustawienia', 'Settings'),
