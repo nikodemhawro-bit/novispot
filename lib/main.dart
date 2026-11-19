@@ -1816,17 +1816,20 @@ class _MainScreenState extends State<MainScreen>
               color: surface,
               borderRadius: BorderRadius.circular(19),
               border: Border.all(color: dividerColor.withValues(alpha: 0.8)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  blurRadius: 18,
-                  offset: const Offset(0, 7),
-                ),
-              ],
             ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              child: Row(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(19),
+                  child: _MobilePlayerAmbientBackground(
+                    cover: mobileCover(song, 180),
+                    baseColor: surface,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  child: Row(
                 children: [
                   mobileCover(song, 48),
                   const SizedBox(width: 11),
@@ -1855,15 +1858,7 @@ class _MainScreenState extends State<MainScreen>
                       ],
                     ),
                   ),
-                  StreamBuilder<PlayerState>(
-                    stream: musicPlayer.playerStateStream,
-                    initialData: PlayerState.stopped,
-                    builder: (context, snapshot) {
-                      final playing = snapshot.data == PlayerState.playing;
-                      return _FloatingEqualizer(isPlaying: playing);
-                    },
-                  ),
-                  const SizedBox(width: 7),
+
                   StreamBuilder<PlayerState>(
                     stream: musicPlayer.playerStateStream,
                     initialData: PlayerState.stopped,
@@ -1892,6 +1887,7 @@ class _MainScreenState extends State<MainScreen>
                     visualDensity: VisualDensity.compact,
                     onPressed: nextSong,
                     icon: Icon(Icons.skip_next_rounded, color: primaryText),
+                  ),
                   ),
                 ],
               ),
@@ -4149,6 +4145,77 @@ class _MainScreenState extends State<MainScreen>
           ),
         ],
       ),
+    );
+  }
+}
+
+class _MobilePlayerAmbientBackground extends StatefulWidget {
+  const _MobilePlayerAmbientBackground({
+    required this.cover,
+    required this.baseColor,
+  });
+
+  final Widget cover;
+  final Color baseColor;
+
+  @override
+  State<_MobilePlayerAmbientBackground> createState() =>
+      _MobilePlayerAmbientBackgroundState();
+}
+
+class _MobilePlayerAmbientBackgroundState
+    extends State<_MobilePlayerAmbientBackground>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 12),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final t = _controller.value;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            ColoredBox(color: widget.baseColor),
+            Transform.translate(
+              offset: Offset((t - 0.5) * 34, (0.5 - t) * 20),
+              child: Transform.scale(
+                scale: 1.8,
+                child: ImageFiltered(
+                  imageFilter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                  child: Opacity(opacity: 0.34, child: widget.cover),
+                ),
+              ),
+            ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    widget.baseColor.withValues(alpha: 0.22),
+                    widget.baseColor.withValues(alpha: 0.62),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
