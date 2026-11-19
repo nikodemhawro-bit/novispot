@@ -35,6 +35,24 @@ jobs:
       - name: Generate Android platform files
         run: flutter create --platforms=android --org com.novispot --project-name novispot .
 
+      - name: Pin Android Gradle Plugin for Gradle 8 compatibility
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("android/settings.gradle.kts")
+          content = path.read_text()
+          updated, count = re.subn(
+              r'(id\(["\']com\.android\.application["\']\)\s+version\s+)["\'][^"\']+["\']',
+              r'\g<1>"8.11.1"',
+              content,
+          )
+          if count != 1:
+              raise SystemExit(f"Expected one Android Gradle Plugin declaration, found {count}")
+          path.write_text(updated)
+          PY
+
       - name: Pin Gradle for metadata_god compatibility
         run: sed -i 's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip#' android/gradle/wrapper/gradle-wrapper.properties
 
