@@ -806,13 +806,9 @@ class _LyricsWaveBackgroundState extends State<_LyricsWaveBackground>
                     fit: StackFit.expand,
                     children: [
                       const ColoredBox(color: Color(0xFF080808)),
-                      if (progress > 0 &&
-                          (widget.coverPath != null || widget.coverUrl != null))
-                        ClipPath(
-                          clipper: _LyricsWaveClipper(
-                            progress,
-                            _animation.value * math.pi * 2,
-                          ),
+                      if (widget.coverPath != null || widget.coverUrl != null)
+                        Opacity(
+                          opacity: 0.58,
                           child: ImageFiltered(
                             imageFilter: ImageFilter.blur(
                               sigmaX: 65,
@@ -831,6 +827,36 @@ class _LyricsWaveBackgroundState extends State<_LyricsWaveBackground>
                                     errorBuilder: (_, __, ___) =>
                                         const ColoredBox(color: Color(0xFF080808)),
                                   ),
+                          ),
+                        ),
+                      if (progress > 0 &&
+                          (widget.coverPath != null || widget.coverUrl != null))
+                        Opacity(
+                          opacity: 0.28,
+                          child: ClipPath(
+                            clipper: _LyricsWaveClipper(
+                              progress,
+                              _animation.value * math.pi * 2,
+                            ),
+                            child: ImageFiltered(
+                              imageFilter: ImageFilter.blur(
+                                sigmaX: 42,
+                                sigmaY: 42,
+                              ),
+                              child: widget.coverPath != null
+                                  ? Image.file(
+                                      File(widget.coverPath!),
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) =>
+                                          const ColoredBox(color: Color(0xFF080808)),
+                                    )
+                                  : Image.network(
+                                      widget.coverUrl!,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) =>
+                                          const ColoredBox(color: Color(0xFF080808)),
+                                    ),
+                            ),
                           ),
                         ),
                       const DecoratedBox(
