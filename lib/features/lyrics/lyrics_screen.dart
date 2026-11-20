@@ -596,12 +596,12 @@ class _LyricsScreenState extends State<LyricsScreen> {
                   shadows: isActive
                       ? [
                           Shadow(
-                            color: Colors.white.withValues(alpha: 0.65),
-                            blurRadius: 18,
+                            color: Colors.white.withValues(alpha: 0.82),
+                            blurRadius: 25,
                           ),
                           Shadow(
-                            color: Colors.white.withValues(alpha: 0.28),
-                            blurRadius: 30,
+                            color: Colors.white.withValues(alpha: 0.48),
+                            blurRadius: 44,
                           ),
                         ]
                       : const [],
