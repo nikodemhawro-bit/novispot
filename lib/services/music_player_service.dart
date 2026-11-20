@@ -9,6 +9,11 @@ class MusicPlayerService {
   Stream<Duration?> get durationStream =>
       _player.stream.duration.map<Duration?>((duration) => duration);
 
+  bool get isPlaying => _player.state.playing;
+
+  PlayerState get currentState =>
+      isPlaying ? PlayerState.playing : PlayerState.paused;
+
   Stream<PlayerState> get playerStateStream =>
       _player.stream.playbackState.map((state) {
         switch (state) {
