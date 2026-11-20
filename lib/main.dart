@@ -726,6 +726,8 @@ class _MainScreenState extends State<MainScreen>
   @override
   void initState() {
     super.initState();
+    playbackNotifier.value = musicPlayer.isPlaying;
+    isActuallyPlaying = musicPlayer.isPlaying;
     loadHomeSource();
     initMediaControls();
     _playlistCloudAnimation = AnimationController(
@@ -1762,11 +1764,11 @@ class _MainScreenState extends State<MainScreen>
                     child: Row(
                       children: [
                         ClipRRect(
-                          borderRadius: BorderRadius.circular(11),
+                          borderRadius: BorderRadius.circular(13),
                           child: Image.asset(
                             'assets/icons/novispot.png',
-                            width: 36,
-                            height: 36,
+                            width: 38,
+                            height: 38,
                             fit: BoxFit.cover,
                           ),
                         ),
@@ -4023,12 +4025,9 @@ class _MainScreenState extends State<MainScreen>
                         onPressed: currentSong == null ? null : previousSong,
                         icon: Icon(Icons.skip_previous_rounded, size: 27),
                       ),
-                      StreamBuilder<PlayerState>(
-                        stream: musicPlayer.playerStateStream,
-                        initialData: musicPlayer.currentState,
-                        builder: (context, snapshot) {
-                          final playing = snapshot.data == PlayerState.playing;
-
+                      ValueListenableBuilder<bool>(
+                        valueListenable: playbackNotifier,
+                        builder: (context, playing, _) {
                           return IconButton(
                             tooltip: playing
                                 ? tr('Pauza', 'Pause')
