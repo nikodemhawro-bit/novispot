@@ -484,7 +484,14 @@ class _LyricsScreenState extends State<LyricsScreen> {
       text.isEmpty ? '♪' : text,
       textAlign: TextAlign.center,
       softWrap: true,
-      style: const TextStyle(color: Colors.white),
+      style: const TextStyle(
+        color: Colors.white,
+        shadows: [
+          Shadow(color: Colors.white, blurRadius: 12),
+          Shadow(color: Colors.white70, blurRadius: 26),
+          Shadow(color: Colors.white38, blurRadius: 42),
+        ],
+      ),
     );
   }
 
