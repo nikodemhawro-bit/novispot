@@ -709,6 +709,7 @@ class _MainScreenState extends State<MainScreen>
   StreamSubscription<PlayerState>? stateSubscription;
 
   bool isActuallyPlaying = false;
+  final ValueNotifier<bool> playbackNotifier = ValueNotifier<bool>(false);
 
   StreamSubscription<MediaControlEvent>? mediaControlSubscription;
   StreamSubscription<Duration?>? mediaDurationSubscription;
@@ -759,6 +760,8 @@ class _MainScreenState extends State<MainScreen>
     }
 
     isActuallyPlaying = playing;
+    playbackNotifier.value = playing;
+    if (mounted) setState(() {});
     unawaited(updateMediaPlaybackState(force: true));
   }
 
@@ -987,6 +990,7 @@ class _MainScreenState extends State<MainScreen>
     unawaited(flushListeningTime(resetRemainder: true));
     unawaited(musicPlayer.dispose());
     _playlistCloudAnimation.dispose();
+    playbackNotifier.dispose();
 
     sleepTimer?.cancel();
     super.dispose();
@@ -1866,29 +1870,23 @@ class _MainScreenState extends State<MainScreen>
                           ],
                         ),
                       ),
-                      StreamBuilder<PlayerState>(
-                        stream: musicPlayer.playerStateStream,
-                        initialData: PlayerState.stopped,
-                        builder: (context, snapshot) {
-                          final playing = snapshot.data == PlayerState.playing;
-                          return IconButton(
-                            visualDensity: VisualDensity.compact,
-                            onPressed: () async {
-                              if (playing) {
-                                await musicPlayer.pause();
-                              } else {
-                                await musicPlayer.resume();
-                              }
-                            },
-                            icon: Icon(
-                              playing
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow_rounded,
-                              color: primaryText,
-                              size: 29,
-                            ),
-                          );
-                        },
+                      ValueListenableBuilder<bool>(
+                        valueListenable: playbackNotifier,
+                        builder: (context, playing, _) => IconButton(
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () async {
+                            if (playbackNotifier.value) {
+                              await musicPlayer.pause();
+                            } else {
+                              await musicPlayer.resume();
+                            }
+                          },
+                          icon: Icon(
+                            playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                            color: primaryText,
+                            size: 29,
+                          ),
+                        ),
                       ),
                       IconButton(
                         visualDensity: VisualDensity.compact,
@@ -2232,31 +2230,27 @@ class _MainScreenState extends State<MainScreen>
                       icon: Icon(Icons.skip_previous_rounded,
                           color: primaryText, size: 34),
                     ),
-                    StreamBuilder<PlayerState>(
-                      stream: musicPlayer.playerStateStream,
-                      initialData: PlayerState.stopped,
-                      builder: (context, snapshot) {
-                        final playing = snapshot.data == PlayerState.playing;
-                        return FilledButton(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: primaryText,
-                            foregroundColor: bg,
-                            shape: const CircleBorder(),
-                            padding: const EdgeInsets.all(17),
-                          ),
-                          onPressed: () async {
-                            if (playing) {
-                              await musicPlayer.pause();
-                            } else {
-                              await musicPlayer.resume();
-                            }
-                          },
-                          child: Icon(
-                            playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                            size: 31,
-                          ),
-                        );
-                      },
+                    ValueListenableBuilder<bool>(
+                      valueListenable: playbackNotifier,
+                      builder: (context, playing, _) => FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: primaryText,
+                          foregroundColor: bg,
+                          shape: const CircleBorder(),
+                          padding: const EdgeInsets.all(17),
+                        ),
+                        onPressed: () async {
+                          if (playbackNotifier.value) {
+                            await musicPlayer.pause();
+                          } else {
+                            await musicPlayer.resume();
+                          }
+                        },
+                        child: Icon(
+                          playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          size: 31,
+                        ),
+                      ),
                     ),
                     IconButton(
                       onPressed: nextSong,
