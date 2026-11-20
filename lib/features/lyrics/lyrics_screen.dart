@@ -593,6 +593,18 @@ class _LyricsScreenState extends State<LyricsScreen> {
                   height: 1.35,
                   fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
                   letterSpacing: 0,
+                  shadows: isActive
+                      ? [
+                          Shadow(
+                            color: Colors.white.withValues(alpha: 0.65),
+                            blurRadius: 18,
+                          ),
+                          Shadow(
+                            color: Colors.white.withValues(alpha: 0.28),
+                            blurRadius: 30,
+                          ),
+                        ]
+                      : const [],
                 ),
                 child: isActive
                     ? _characterKaraoke(
