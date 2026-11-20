@@ -1759,26 +1759,43 @@ class _MainScreenState extends State<MainScreen>
               child: Row(
                 children: [
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: [
-                        Text(
-                          'novispot',
-                          style: TextStyle(
-                            color: primaryText,
-                            fontSize: 25,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -1.2,
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(11),
+                          child: Image.asset(
+                            'assets/icons/novispot.png',
+                            width: 36,
+                            height: 36,
+                            fit: BoxFit.cover,
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          pageTitle.toUpperCase(),
-                          style: TextStyle(
-                            color: muted,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.8,
+                        const SizedBox(width: 11),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                'novispot',
+                                style: TextStyle(
+                                  color: primaryText,
+                                  fontSize: 25,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -1.2,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                pageTitle.toUpperCase(),
+                                style: TextStyle(
+                                  color: muted,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 1.8,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -4008,7 +4025,7 @@ class _MainScreenState extends State<MainScreen>
                       ),
                       StreamBuilder<PlayerState>(
                         stream: musicPlayer.playerStateStream,
-                        initialData: PlayerState.stopped,
+                        initialData: musicPlayer.currentState,
                         builder: (context, snapshot) {
                           final playing = snapshot.data == PlayerState.playing;
 
