@@ -1,0 +1,78 @@
+name: Build Novispot Android APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "lib/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/android-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.9
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform files
+        run: flutter create --platforms=android --org com.novispot --project-name novispot .
+
+      - name: Pin Android Gradle Plugin for Gradle 8 compatibility
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("android/settings.gradle.kts")
+          content = path.read_text()
+          updated, count = re.subn(
+              r'(id\(["\']com\.android\.application["\']\)\s+version\s+)["\'][^"\']+["\']',
+              r'\g<1>"8.11.1"',
+              content,
+          )
+          if count != 1:
+              raise SystemExit(f"Expected one Android Gradle Plugin declaration, found {count}")
+          path.write_text(updated)
+          PY
+
+      - name: Pin Gradle for metadata_god compatibility
+        run: sed -i 's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip#' android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate Novispot Android launcher icons
+        run: dart run flutter_launcher_icons
+
+      - name: Analyze Dart code
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build release APK
+        run: flutter build apk --release --build-name=2.0.0 --build-number=2
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Novispot-Android-2.0.0
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
