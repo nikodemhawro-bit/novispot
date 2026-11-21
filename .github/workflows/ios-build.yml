@@ -45,50 +45,9 @@ jobs:
       - name: Analyze Dart code
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Patch miniaudio iOS compiler mode
-        run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          pub_cache = Path(os.environ.get("PUB_CACHE", Path.home() / ".pub-cache"))
-          build_files = list((pub_cache / "hosted" / "pub.dev").glob("miniaudio_player-*/rust/build.rs"))
-          if not build_files:
-              raise SystemExit("miniaudio_player rust/build.rs was not found in PUB_CACHE")
-
-          for path in build_files:
-              source = path.read_text()
-              if 'build.flag("-x").flag("objective-c");' in source:
-                  print(f"Objective-C compiler mode already enabled: {path}")
-                  continue
-
-              marker = '    } else if target_os == "macos" || target_os == "ios" {\n'
-              if marker not in source:
-                  raise SystemExit(f"Unexpected miniaudio_player build.rs layout: {path}")
-
-              replacement = marker + """        if target_os == "ios" {
-                      build.flag("-x").flag("objective-c");
-                      println!("cargo:rustc-link-lib=objc");
-                      println!("cargo:rustc-link-lib=pthread");
-                      println!("cargo:rustc-link-lib=m");
-                      for framework in [
-                          "Foundation",
-                          "CoreFoundation",
-                          "CoreAudio",
-                          "AudioToolbox",
-                          "AVFoundation",
-                          "AVFAudio",
-                          "UIKit",
-                      ] {
-                          println!("cargo:rustc-link-lib=framework={framework}");
-                      }
-                  }
-          """
-              path.write_text(source.replace(marker, replacement, 1))
-              print(f"Patched iOS Objective-C compiler mode: {path}")
-          PY
-
       - name: Build unsigned iOS app
+        env:
+          CFLAGS: -x objective-c
         run: flutter build ios --release --no-codesign --build-name=2.0.0 --build-number=2
 
       - name: Package iOS app
