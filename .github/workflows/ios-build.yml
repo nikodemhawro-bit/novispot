@@ -1,0 +1,62 @@
+name: Build Novispot iOS
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "lib/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/ios-build.yml"
+  push:
+    branches:
+      - feature/android-mobile-experience
+    paths:
+      - "lib/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/ios-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.9
+          channel: stable
+          cache: true
+
+      - name: Generate iOS platform files
+        run: flutter create --platforms=ios --org com.novispot --project-name novispot .
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze Dart code
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign --build-name=2.0.0 --build-number=2
+
+      - name: Package iOS app
+        run: |
+          cd build/ios/iphoneos
+          ditto -c -k --sequesterRsrc --keepParent Runner.app Novispot-iOS-2.0.0-unsigned.zip
+
+      - name: Upload iOS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Novispot-iOS-2.0.0-unsigned
+          path: build/ios/iphoneos/Novispot-iOS-2.0.0-unsigned.zip
+          if-no-files-found: error
+          retention-days: 14
