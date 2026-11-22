@@ -42,55 +42,62 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Fix miniaudio Objective-C compilation on iOS
+      - name: Set up Rust for iOS native assets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Restore and patch miniaudio_player 3.0.2 native source
         run: |
           python3 - <<'PY'
           import os
+          import re
+          import shutil
+          import subprocess
           from pathlib import Path
 
-          cache = Path(os.environ.get("PUB_CACHE", Path.home() / ".pub-cache"))
-          package_dirs = list(cache.glob("hosted/pub.dev/miniaudio_player-3.0.2"))
-          if not package_dirs:
-              raise SystemExit("Could not find miniaudio_player 3.0.2 in PUB_CACHE")
+          package_cache = Path(os.environ.get("PUB_CACHE", Path.home() / ".pub-cache"))
+          matches = list(package_cache.glob("hosted/pub.dev/miniaudio_player-3.0.2"))
+          if len(matches) != 1:
+              raise SystemExit(f"Expected one miniaudio_player 3.0.2 package, found {len(matches)}")
+          package = matches[0]
 
-          package = package_dirs[0]
-          rust_builds = []
-          for candidate in package.rglob("build.rs"):
-              try:
-                  source = candidate.read_text()
-              except (OSError, UnicodeDecodeError):
-                  continue
-              if "cc::Build::new()" in source and "CARGO_CFG_TARGET_OS" in source and "build.compile(" in source:
-                  rust_builds.append((candidate, source))
+          # pub.dev's published archive contains hook/build.dart but omits the
+          # rust/ directory required by that hook. Restore it from the exact
+          # upstream source revision whose pubspec declares version 3.0.2.
+          upstream = Path(os.environ["RUNNER_TEMP"]) / "miniaudio_player-3.0.2-source"
+          subprocess.run(["git", "init", str(upstream)], check=True)
+          subprocess.run(["git", "-C", str(upstream), "remote", "add", "origin",
+                          "https://github.com/chomusuke-mk/miniaudio_player.git"], check=True)
+          revision = "cddfae58ee8e611c56b2b03c6c2299d7fe47b38d"
+          subprocess.run(["git", "-C", str(upstream), "fetch", "--depth=1", "origin", revision], check=True)
+          subprocess.run(["git", "-C", str(upstream), "checkout", "--detach", "FETCH_HEAD"], check=True)
 
-          if len(rust_builds) != 1:
-              print("Package files (first 250):")
-              for path in sorted(p for p in package.rglob("*") if p.is_file())[:250]:
-                  print(path.relative_to(package))
-              raise SystemExit(
-                  f"Expected exactly one native cc build.rs, found {len(rust_builds)}; "
-                  "refusing to modify an unknown file"
-              )
+          pubspec = (upstream / "pubspec.yaml").read_text()
+          if not re.search(r"(?m)^version:\\s*3\\.0\\.2\\s*$", pubspec):
+              raise SystemExit("Pinned upstream source does not declare miniaudio_player 3.0.2")
 
-          build_script, source = rust_builds[0]
-          flag = 'build.flag("-x").flag("objective-c");'
-          if flag not in source:
-              compile_at = source.rfind("build.compile(")
-              if compile_at < 0:
-                  raise SystemExit("Could not locate native C compile call")
-              patch = (
-                  '    if target_os == "ios" {\\n'
-                  f'        {flag}\\n'
-                  '    }\\n\\n'
-              )
-              source = source[:compile_at] + patch + source[compile_at:]
-              build_script.write_text(source)
+          rust_source = upstream / "rust"
+          if not (rust_source / "Cargo.toml").is_file() or not (rust_source / "build.rs").is_file():
+              raise SystemExit("Pinned upstream source is missing rust/Cargo.toml or rust/build.rs")
+          shutil.copytree(rust_source, package / "rust", dirs_exist_ok=True)
 
-          verified = build_script.read_text()
-          if 'if target_os == "ios"' not in verified or flag not in verified:
-              raise SystemExit("Objective-C flag verification failed")
+          build_rs = package / "rust" / "build.rs"
+          source = build_rs.read_text()
+          marker = '    build.compile("miniaudio_bridge");'
+          patch = '    if target_os == "ios" {\\n        build.flag("-x").flag("objective-c");\\n    }\\n\\n'
+          if source.count(marker) != 1:
+              raise SystemExit("Could not uniquely locate miniaudio C bridge compile call")
+          if 'build.flag("-x").flag("objective-c");' not in source:
+              source = source.replace(marker, patch + marker, 1)
+              build_rs.write_text(source)
 
-          print(f"Verified Objective-C compilation patch: {build_script}")
+          verified = build_rs.read_text()
+          if 'if target_os == "ios"' not in verified or 'build.flag("-x").flag("objective-c");' not in verified:
+              raise SystemExit("Objective-C-only iOS compiler flag verification failed")
+
+          print(f"Restored native Rust source into {package / 'rust'}")
+          print(f"Patched iOS C bridge compiler mode in {build_rs}")
           PY
 
       - name: Analyze Dart code
