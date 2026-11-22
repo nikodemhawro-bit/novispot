@@ -42,6 +42,56 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Fix miniaudio Objective-C compilation on iOS
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          cache = Path(os.environ.get("PUB_CACHE", Path.home() / ".pub-cache"))
+          candidates = list(cache.glob("hosted/pub.dev/miniaudio_player-3.0.2/**/build.dart"))
+          if not candidates:
+              raise SystemExit("Could not find miniaudio_player 3.0.2 build hook in PUB_CACHE")
+
+          hook = next((p for p in candidates if "CBuilder.library(" in p.read_text()), None)
+          if hook is None:
+              raise SystemExit("miniaudio_player 3.0.2 build hook has no CBuilder.library; refusing an unsafe patch")
+
+          source = hook.read_text()
+          start = source.index("CBuilder.library(")
+          end = source.find("\n      );", start)
+          if end == -1:
+              end = source.find("\n    );", start)
+          if end == -1:
+              raise SystemExit("Could not locate the CBuilder.library argument block")
+
+          block = source[start:end]
+          lang = re.search(r"(?m)^(\s*)language:\s*([^,\n]+),", block)
+          if lang is None:
+              raise SystemExit("Could not locate the CBuilder language setting")
+
+          indent = lang.group(1)
+          block = block[:lang.start()] + (
+              f"{indent}language: targetOS == OS.iOS ? Language.objectiveC : Language.c,"
+          ) + block[lang.end():]
+
+          if not re.search(r"(?m)^\s*flags\s*:", block):
+              marker = re.search(r"(?m)^(\s*)language:.*,$", block)
+              insert_at = marker.end()
+              block = block[:insert_at] + (
+                  "\n" + indent + "flags: ["
+                  "\n" + indent + "  if (targetOS == OS.iOS) ...["
+                  "\n" + indent + "    '-x',"
+                  "\n" + indent + "    'objective-c',"
+                  "\n" + indent + "  ],"
+                  "\n" + indent + "],"
+              ) + block[insert_at:]
+
+          hook.write_text(source[:start] + block + source[end:])
+          print(f"Patched {hook} for iOS Objective-C compilation")
+          PY
+
       - name: Analyze Dart code
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
