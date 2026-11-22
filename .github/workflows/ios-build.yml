@@ -74,7 +74,7 @@ jobs:
           subprocess.run(["git", "-C", str(upstream), "checkout", "--detach", "FETCH_HEAD"], check=True)
 
           pubspec = (upstream / "pubspec.yaml").read_text()
-          if not re.search(r"(?m)^version:\\s*3\\.0\\.2\\s*$", pubspec):
+          if not re.search(r"(?m)^version:\s*3\.0\.2\s*$", pubspec):
               raise SystemExit("Pinned upstream source does not declare miniaudio_player 3.0.2")
 
           rust_source = upstream / "rust"
@@ -85,7 +85,7 @@ jobs:
           build_rs = package / "rust" / "build.rs"
           source = build_rs.read_text()
           marker = '    build.compile("miniaudio_bridge");'
-          patch = '    if target_os == "ios" {\\n        build.flag("-x").flag("objective-c");\\n    }\\n\\n'
+          patch = '    if target_os == "ios" {\n        build.flag("-x").flag("objective-c");\n    }\n\n'
           if source.count(marker) != 1:
               raise SystemExit("Could not uniquely locate miniaudio C bridge compile call")
           if 'build.flag("-x").flag("objective-c");' not in source:
