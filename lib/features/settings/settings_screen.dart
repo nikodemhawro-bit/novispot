@@ -109,7 +109,7 @@ class SettingsScreen extends StatelessWidget {
                   ),
                   const Spacer(),
                   const Text(
-                    'NOVISPOT 1.0.0 (BETA)',
+                    'NOVISPOT 2.0.0',
                     style: TextStyle(color: Color(0xFF777777)),
                   ),
                 ],

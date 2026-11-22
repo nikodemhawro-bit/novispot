@@ -709,6 +709,7 @@ class _MainScreenState extends State<MainScreen>
   StreamSubscription<PlayerState>? stateSubscription;
 
   bool isActuallyPlaying = false;
+  final ValueNotifier<bool> playbackNotifier = ValueNotifier<bool>(false);
 
   StreamSubscription<MediaControlEvent>? mediaControlSubscription;
   StreamSubscription<Duration?>? mediaDurationSubscription;
@@ -725,6 +726,8 @@ class _MainScreenState extends State<MainScreen>
   @override
   void initState() {
     super.initState();
+    playbackNotifier.value = musicPlayer.isPlaying;
+    isActuallyPlaying = musicPlayer.isPlaying;
     loadHomeSource();
     initMediaControls();
     _playlistCloudAnimation = AnimationController(
@@ -759,6 +762,8 @@ class _MainScreenState extends State<MainScreen>
     }
 
     isActuallyPlaying = playing;
+    playbackNotifier.value = playing;
+    if (mounted) setState(() {});
     unawaited(updateMediaPlaybackState(force: true));
   }
 
@@ -987,6 +992,7 @@ class _MainScreenState extends State<MainScreen>
     unawaited(flushListeningTime(resetRemainder: true));
     unawaited(musicPlayer.dispose());
     _playlistCloudAnimation.dispose();
+    playbackNotifier.dispose();
 
     sleepTimer?.cancel();
     super.dispose();
@@ -1714,6 +1720,8 @@ class _MainScreenState extends State<MainScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (Platform.isAndroid) return mobileAppShell();
+
     return Scaffold(
       body: Column(
         children: [
@@ -1728,6 +1736,563 @@ class _MainScreenState extends State<MainScreen>
           ),
           player(),
         ],
+      ),
+    );
+  }
+
+  Widget mobileAppShell() {
+    final pageTitle = switch (page) {
+      1 => tr('Szukaj', 'Search'),
+      2 => tr('Biblioteka', 'Library'),
+      3 => tr('Polubione', 'Liked Songs'),
+      4 => tr('Playlisty', 'Playlists'),
+      5 => tr('Statystyki', 'Statistics'),
+      6 => tr('Ustawienia', 'Settings'),
+      _ => tr('Twoja muzyka', 'Your music'),
+    };
+
+    return Scaffold(
+      backgroundColor: bg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 14, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(13),
+                          child: Image.asset(
+                            'assets/icons/novispot.png',
+                            width: 38,
+                            height: 38,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        const SizedBox(width: 11),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                'novispot',
+                                style: TextStyle(
+                                  color: primaryText,
+                                  fontSize: 25,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -1.2,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                pageTitle.toUpperCase(),
+                                style: TextStyle(
+                                  color: muted,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 1.8,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: tr('Więcej', 'More'),
+                    onPressed: showMobileMoreMenu,
+                    icon: Icon(Icons.more_horiz_rounded, color: primaryText),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(child: content()),
+            if (currentSong != null) mobileMiniPlayer(),
+            mobileNavigationBar(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget mobileMiniPlayer() {
+    final song = currentSong!;
+    final title = song['title']?.toString() ?? 'Unknown track';
+    final artist = song['artist']?.toString() ?? 'Novispot';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 5, 12, 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: openMobilePlayer,
+          borderRadius: BorderRadius.circular(19),
+          child: Ink(
+            height: 68,
+            decoration: BoxDecoration(
+              color: surface,
+              borderRadius: BorderRadius.circular(19),
+              border: Border.all(color: dividerColor.withValues(alpha: 0.8)),
+            ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(19),
+                  child: _PlayerBarWaveBackground(
+                    positionStream: musicPlayer.positionStream,
+                    durationStream: musicPlayer.durationStream,
+                    coverUrl: song['source'] == 'local' ||
+                            song['coverArt'] == null ||
+                            service == null
+                        ? null
+                        : service!.getCoverArtUrl(song['coverArt'].toString()).toString(),
+                    coverPath: song['source'] == 'local'
+                        ? song['coverPath']?.toString()
+                        : null,
+                    baseColor: panel,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  child: Row(
+                    children: [
+                      mobileCover(song, 48),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: primaryText,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: muted, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                      ValueListenableBuilder<bool>(
+                        valueListenable: playbackNotifier,
+                        builder: (context, playing, _) => IconButton(
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () async {
+                            if (playbackNotifier.value) {
+                              await musicPlayer.pause();
+                            } else {
+                              await musicPlayer.resume();
+                            }
+                          },
+                          icon: Icon(
+                            playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                            color: primaryText,
+                            size: 29,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: nextSong,
+                        icon: Icon(Icons.skip_next_rounded, color: primaryText),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget mobileCover(Map<String, dynamic> song, double size) {
+    final isLocal = song['source'] == 'local';
+    final coverPath = song['coverPath']?.toString();
+    final coverId = song['coverArt']?.toString();
+
+    Widget image;
+    if (isLocal && coverPath != null && coverPath.isNotEmpty) {
+      image = Image.file(
+        File(coverPath),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _coverPlaceholder(),
+      );
+    } else if (!isLocal && coverId != null && service != null) {
+      image = Image.network(
+        service!.getCoverArtUrl(coverId).toString(),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _coverPlaceholder(),
+      );
+    } else {
+      image = SizedBox(width: size, height: size, child: _coverPlaceholder());
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size > 100 ? 22 : 11),
+      child: SizedBox(width: size, height: size, child: image),
+    );
+  }
+
+  Widget mobileNavigationBar() {
+    const destinations = [
+      (0, Icons.home_rounded, 'Home', 'Start'),
+      (1, Icons.search_rounded, 'Search', 'Szukaj'),
+      (2, Icons.library_music_rounded, 'Library', 'Biblioteka'),
+      (4, Icons.queue_music_rounded, 'Playlists', 'Playlisty'),
+    ];
+    final selectedPage = selectedAlbum != null || selectedPlaylist != null
+        ? 2
+        : page;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+      decoration: BoxDecoration(
+        color: panel,
+        borderRadius: BorderRadius.circular(21),
+        border: Border.all(color: dividerColor.withValues(alpha: 0.8)),
+      ),
+      child: Row(
+        children: destinations.map((destination) {
+          final index = destination.$1;
+          final selected = selectedPage == index;
+          return Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () {
+                setState(() {
+                  page = index;
+                  selectedAlbum = null;
+                  selectedPlaylist = null;
+                });
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: selected ? surface : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      destination.$2,
+                      color: selected ? primaryText : muted,
+                      size: 21,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      pl ? destination.$4 : destination.$3,
+                      style: TextStyle(
+                        color: selected ? primaryText : muted,
+                        fontSize: 10,
+                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Future<void> showMobileMoreMenu() async {
+    final selected = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: panel,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.favorite_border_rounded),
+              title: Text(tr('Polubione utwory', 'Liked songs')),
+              onTap: () => Navigator.pop(sheetContext, 3),
+            ),
+            ListTile(
+              leading: const Icon(Icons.bar_chart_rounded),
+              title: Text(tr('Statystyki', 'Statistics')),
+              onTap: () => Navigator.pop(sheetContext, 5),
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: Text(tr('Ustawienia i equalizer', 'Settings & equalizer')),
+              onTap: () => Navigator.pop(sheetContext, 6),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (selected != null && mounted) {
+      setState(() {
+        page = selected;
+        selectedAlbum = null;
+        selectedPlaylist = null;
+      });
+    }
+  }
+
+  Future<void> openMobilePlayer() async {
+    final song = currentSong;
+    if (song == null) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, sheetSetState) {
+          final title = song['title']?.toString() ?? 'Unknown track';
+          final artist = song['artist']?.toString() ?? 'Novispot';
+          final id = song['id']?.toString() ?? '';
+          final liked = likedIds.contains(id);
+          final width = MediaQuery.of(sheetContext).size.width;
+          final coverSize = (width * 0.68).clamp(190.0, 300.0).toDouble();
+
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            tr('TERAZ ODTWARZANE', 'NOW PLAYING'),
+                            style: TextStyle(
+                              color: muted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.8,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            tr('Twoja muzyka', 'Your music'),
+                            style: TextStyle(
+                              color: primaryText,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: tr('Tekst utworu', 'Lyrics'),
+                      onPressed: () {
+                        Navigator.pop(sheetContext);
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => LyricsScreen(
+                              title: title,
+                              artist: artist,
+                              coverUrl: song['source'] == 'local' ||
+                                      song['coverArt'] == null ||
+                                      service == null
+                                  ? null
+                                  : service!
+                                      .getCoverArtUrl(song['coverArt'].toString())
+                                      .toString(),
+                              coverPath: song['source'] == 'local'
+                                  ? song['coverPath']?.toString()
+                                  : null,
+                              positionStream: musicPlayer.positionStream,
+                              durationStream: musicPlayer.durationStream,
+                              polish: pl,
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.lyrics_outlined),
+                    ),
+                    IconButton(
+                      tooltip: tr('Equalizer', 'Equalizer'),
+                      onPressed: () {
+                        Navigator.pop(sheetContext);
+                        if (mounted) setState(() => page = 6);
+                      },
+                      icon: const Icon(Icons.equalizer_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Center(child: mobileCover(song, coverSize)),
+                const SizedBox(height: 24),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: primaryText,
+                      fontSize: 23,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.6,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    artist,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: muted, fontSize: 14),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                StreamBuilder<Duration>(
+                  stream: musicPlayer.positionStream,
+                  initialData: Duration.zero,
+                  builder: (context, positionSnapshot) {
+                    final position = positionSnapshot.data ?? Duration.zero;
+                    return StreamBuilder<Duration?>(
+                      stream: musicPlayer.durationStream,
+                      builder: (context, durationSnapshot) {
+                        final duration = durationSnapshot.data ?? Duration.zero;
+                        final maxMs = duration.inMilliseconds.toDouble();
+                        final currentMs = position.inMilliseconds
+                            .clamp(0, duration.inMilliseconds)
+                            .toDouble();
+                        return Column(
+                          children: [
+                            WavyProgressBar(
+                              value: currentMs,
+                              max: maxMs,
+                              coverUrl: song['source'] == 'local' ||
+                                      song['coverArt'] == null ||
+                                      service == null
+                                  ? null
+                                  : service!
+                                      .getCoverArtUrl(song['coverArt'].toString())
+                                      .toString(),
+                              trackColor: trackColor,
+                              onSeek: maxMs <= 0
+                                  ? null
+                                  : (value) => musicPlayer.seek(
+                                      Duration(milliseconds: value.round()),
+                                    ),
+                            ),
+                            const SizedBox(height: 7),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(_formatDuration(position),
+                                    style: TextStyle(color: muted, fontSize: 11)),
+                                Text(_formatDuration(duration),
+                                    style: TextStyle(color: muted, fontSize: 11)),
+                              ],
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  },
+                ),
+                const SizedBox(height: 15),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    IconButton(
+                      onPressed: () {
+                        toggleShuffle();
+                        sheetSetState(() {});
+                      },
+                      icon: Icon(
+                        Icons.shuffle_rounded,
+                        color: shuffleEnabled ? primaryText : muted,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: previousSong,
+                      icon: Icon(Icons.skip_previous_rounded,
+                          color: primaryText, size: 34),
+                    ),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: playbackNotifier,
+                      builder: (context, playing, _) => FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: primaryText,
+                          foregroundColor: bg,
+                          shape: const CircleBorder(),
+                          padding: const EdgeInsets.all(17),
+                        ),
+                        onPressed: () async {
+                          if (playbackNotifier.value) {
+                            await musicPlayer.pause();
+                          } else {
+                            await musicPlayer.resume();
+                          }
+                        },
+                        child: Icon(
+                          playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          size: 31,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: nextSong,
+                      icon: Icon(Icons.skip_next_rounded,
+                          color: primaryText, size: 34),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        toggleLike(song);
+                        sheetSetState(() {});
+                      },
+                      icon: Icon(
+                        liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                        color: liked ? primaryText : muted,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -1942,7 +2507,7 @@ class _MainScreenState extends State<MainScreen>
 
     if (service == null || homeSourceLocal) {
       return ListView(
-        padding: EdgeInsets.fromLTRB(36, 30, 36, 42),
+        padding: EdgeInsets.fromLTRB(Platform.isAndroid ? 18 : 36, Platform.isAndroid ? 20 : 30, Platform.isAndroid ? 18 : 36, Platform.isAndroid ? 32 : 42),
         children: [
           Text(
             tr('TWOJA MUZYKA', 'YOUR MUSIC'),
@@ -2006,7 +2571,7 @@ class _MainScreenState extends State<MainScreen>
 
         if (snapshot.hasError) {
           return ListView(
-            padding: EdgeInsets.all(38),
+            padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
             children: [_errorPanel(snapshot.error.toString())],
           );
         }
@@ -2015,7 +2580,7 @@ class _MainScreenState extends State<MainScreen>
 
         if (albums.isEmpty) {
           return ListView(
-            padding: EdgeInsets.all(38),
+            padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
             children: [
               Text(
                 tr("Twoja muzyka", "Your Music"),
@@ -2036,7 +2601,7 @@ class _MainScreenState extends State<MainScreen>
         final featuredCover = featured["coverArt"]?.toString();
 
         return ListView(
-          padding: EdgeInsets.fromLTRB(36, 30, 36, 42),
+          padding: EdgeInsets.fromLTRB(Platform.isAndroid ? 18 : 36, Platform.isAndroid ? 20 : 30, Platform.isAndroid ? 18 : 36, Platform.isAndroid ? 32 : 42),
           children: [
             Text(
               tr("ODKRYWAJ", "LISTEN NOW"),
@@ -2080,7 +2645,7 @@ class _MainScreenState extends State<MainScreen>
               onTap: () => openAlbum(featured),
               borderRadius: BorderRadius.circular(24),
               child: Container(
-                height: 330,
+                height: Platform.isAndroid ? 260 : 330,
                 decoration: BoxDecoration(
                   color: panel,
                   borderRadius: BorderRadius.circular(24),
@@ -2417,7 +2982,7 @@ class _MainScreenState extends State<MainScreen>
         final songs = snapshot.data ?? [];
 
         return ListView(
-          padding: EdgeInsets.all(38),
+          padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
           children: [
             TextButton.icon(
               onPressed: closeDetails,
@@ -2505,7 +3070,7 @@ class _MainScreenState extends State<MainScreen>
 
   Widget searchPage() {
     return Padding(
-      padding: EdgeInsets.all(38),
+      padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2636,7 +3201,7 @@ class _MainScreenState extends State<MainScreen>
     }
 
     return ListView(
-      padding: EdgeInsets.all(38),
+      padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
       children: [
         heading(
           tr("Twoja biblioteka", "Your Library"),
@@ -2827,7 +3392,7 @@ class _MainScreenState extends State<MainScreen>
         final songs = snapshot.data ?? [];
 
         return ListView(
-          padding: EdgeInsets.all(38),
+          padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
           children: [
             heading(
               tr('Polubione utwory', 'Liked Songs'),
@@ -2983,7 +3548,7 @@ class _MainScreenState extends State<MainScreen>
   Widget playlistsPage() {
     if (service == null) {
       return ListView(
-        padding: EdgeInsets.all(38),
+        padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
         children: [
           heading(
             tr('Playlisty', 'Playlists'),
@@ -3006,7 +3571,7 @@ class _MainScreenState extends State<MainScreen>
         final playlists = snapshot.data ?? [];
 
         return ListView(
-          padding: EdgeInsets.all(38),
+          padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
           children: [
             Row(
               children: [
@@ -3077,7 +3642,7 @@ class _MainScreenState extends State<MainScreen>
         final songs = snapshot.data ?? [];
 
         return ListView(
-          padding: EdgeInsets.all(38),
+          padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
           children: [
             TextButton.icon(
               onPressed: closeDetails,
@@ -3139,7 +3704,7 @@ class _MainScreenState extends State<MainScreen>
 
   Widget settingsPage() {
     return ListView(
-      padding: EdgeInsets.all(38),
+      padding: EdgeInsets.all(Platform.isAndroid ? 20 : 38),
       children: [
         heading(
           tr('Ustawienia', 'Settings'),
@@ -3435,6 +4000,8 @@ class _MainScreenState extends State<MainScreen>
                                           : null,
                                       positionStream:
                                           musicPlayer.positionStream,
+                                      durationStream:
+                                          musicPlayer.durationStream,
                                       polish: pl,
                                     ),
                                   ),
@@ -3458,12 +4025,9 @@ class _MainScreenState extends State<MainScreen>
                         onPressed: currentSong == null ? null : previousSong,
                         icon: Icon(Icons.skip_previous_rounded, size: 27),
                       ),
-                      StreamBuilder<PlayerState>(
-                        stream: musicPlayer.playerStateStream,
-                        initialData: PlayerState.stopped,
-                        builder: (context, snapshot) {
-                          final playing = snapshot.data == PlayerState.playing;
-
+                      ValueListenableBuilder<bool>(
+                        valueListenable: playbackNotifier,
+                        builder: (context, playing, _) {
                           return IconButton(
                             tooltip: playing
                                 ? tr('Pauza', 'Pause')

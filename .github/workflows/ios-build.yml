@@ -1,0 +1,131 @@
+name: Build Novispot iOS
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "lib/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/ios-build.yml"
+  push:
+    branches:
+      - feature/android-mobile-experience
+    paths:
+      - "lib/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/ios-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.9
+          channel: stable
+          cache: true
+
+      - name: Generate iOS platform files
+        run: flutter create --platforms=ios --org com.novispot --project-name novispot .
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Set up Rust for iOS native assets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Restore and patch miniaudio_player 3.0.2 native source
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          package_cache = Path(os.environ.get("PUB_CACHE", Path.home() / ".pub-cache"))
+          matches = list(package_cache.glob("hosted/pub.dev/miniaudio_player-3.0.2"))
+          if len(matches) != 1:
+              raise SystemExit(f"Expected one miniaudio_player 3.0.2 package, found {len(matches)}")
+          package = matches[0]
+
+          # pub.dev's published archive contains hook/build.dart but omits the
+          # rust/ directory required by that hook. Restore it from the exact
+          # upstream source revision whose pubspec declares version 3.0.2.
+          upstream = Path(os.environ["RUNNER_TEMP"]) / "miniaudio_player-3.0.2-source"
+          subprocess.run(["git", "init", str(upstream)], check=True)
+          subprocess.run(["git", "-C", str(upstream), "remote", "add", "origin",
+                          "https://github.com/chomusuke-mk/miniaudio_player.git"], check=True)
+          revision = "cddfae58ee8e611c56b2b03c6c2299d7fe47b38d"
+          subprocess.run(["git", "-C", str(upstream), "fetch", "--depth=1", "origin", revision], check=True)
+          subprocess.run(["git", "-C", str(upstream), "checkout", "--detach", "FETCH_HEAD"], check=True)
+
+          pubspec = (upstream / "pubspec.yaml").read_text()
+          if not re.search(r"(?m)^version:\s*3\.0\.2\s*$", pubspec):
+              raise SystemExit("Pinned upstream source does not declare miniaudio_player 3.0.2")
+
+          rust_source = upstream / "rust"
+          if not (rust_source / "Cargo.toml").is_file() or not (rust_source / "build.rs").is_file():
+              raise SystemExit("Pinned upstream source is missing rust/Cargo.toml or rust/build.rs")
+          shutil.copytree(rust_source, package / "rust", dirs_exist_ok=True)
+
+          build_rs = package / "rust" / "build.rs"
+          source = build_rs.read_text()
+          marker = '    build.compile("miniaudio_bridge");'
+          patch = '    if target_os == "ios" {\n        build.flag("-x").flag("objective-c");\n    }\n\n'
+          if source.count(marker) != 1:
+              raise SystemExit("Could not uniquely locate miniaudio C bridge compile call")
+          if 'build.flag("-x").flag("objective-c");' not in source:
+              source = source.replace(marker, patch + marker, 1)
+              build_rs.write_text(source)
+
+          verified = build_rs.read_text()
+          if 'if target_os == "ios"' not in verified or 'build.flag("-x").flag("objective-c");' not in verified:
+              raise SystemExit("Objective-C-only iOS compiler flag verification failed")
+
+          print(f"Restored native Rust source into {package / 'rust'}")
+          print(f"Patched iOS C bridge compiler mode in {build_rs}")
+          PY
+
+      - name: Analyze Dart code
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build unsigned iOS app
+        run: |
+          set -o pipefail
+          flutter build ios --release --no-codesign --build-name=2.0.0 --build-number=2 -v 2>&1 | tee ios-build.log
+
+      - name: Upload iOS compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Novispot-iOS-build-diagnostics
+          path: ios-build.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Package iOS app
+        run: |
+          cd build/ios/iphoneos
+          ditto -c -k --sequesterRsrc --keepParent Runner.app Novispot-iOS-2.0.0-unsigned.zip
+
+      - name: Upload iOS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Novispot-iOS-2.0.0-unsigned
+          path: build/ios/iphoneos/Novispot-iOS-2.0.0-unsigned.zip
+          if-no-files-found: error
+          retention-days: 14

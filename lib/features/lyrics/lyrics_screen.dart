@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ class LyricsScreen extends StatefulWidget {
   final String? coverUrl;
   final String? coverPath;
   final Stream<Duration> positionStream;
+  final Stream<Duration?> durationStream;
   final bool polish;
 
   const LyricsScreen({
@@ -26,6 +28,7 @@ class LyricsScreen extends StatefulWidget {
     required this.title,
     required this.artist,
     required this.positionStream,
+    required this.durationStream,
     this.coverUrl,
     this.coverPath,
     this.polish = true,
@@ -477,38 +480,16 @@ class _LyricsScreenState extends State<LyricsScreen> {
     int lineIndex,
     Duration position,
   ) {
-    if (text.isEmpty) {
-      return const Text('♪', textAlign: TextAlign.center);
-    }
-
-    final start = lines[lineIndex].time;
-
-    final lineDuration = lineIndex + 1 < lines.length
-        ? lines[lineIndex + 1].time - start
-        : const Duration(seconds: 3);
-
-    final elapsed = position - start;
-
-    final progress = (elapsed.inMicroseconds /
-            lineDuration.inMicroseconds)
-        .clamp(0.0, 1.0);
-
-    final glow = 1.0 - progress;
-
     return Text(
-      text,
+      text.isEmpty ? '♪' : text,
       textAlign: TextAlign.center,
-      style: TextStyle(
+      softWrap: true,
+      style: const TextStyle(
         color: Colors.white,
         shadows: [
-          Shadow(
-            color: Colors.white.withValues(alpha: glow * 0.30),
-            blurRadius: 5 + glow * 6,
-          ),
-          Shadow(
-            color: Colors.white.withValues(alpha: glow * 0.12),
-            blurRadius: glow * 12,
-          ),
+          Shadow(color: Colors.white, blurRadius: 12),
+          Shadow(color: Colors.white70, blurRadius: 26),
+          Shadow(color: Colors.white38, blurRadius: 42),
         ],
       ),
     );
@@ -569,7 +550,7 @@ class _LyricsScreenState extends State<LyricsScreen> {
 
     if (!synced) {
       return SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 35, vertical: 40),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
         child: Text(
           plainLyrics ?? '',
           textAlign: TextAlign.center,
@@ -592,7 +573,7 @@ class _LyricsScreenState extends State<LyricsScreen> {
         _centerLine(active);
 
         return ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 35, vertical: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 110),
           itemCount: lines.length,
           itemBuilder: (context, index) {
             final isActive = index == active;
@@ -615,10 +596,22 @@ class _LyricsScreenState extends State<LyricsScreen> {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: color,
-                  fontSize: isActive ? 29 : 20,
+                  fontSize: isActive ? 26 : 19,
                   height: 1.35,
                   fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
-                  letterSpacing: isActive ? -0.5 : 0,
+                  letterSpacing: 0,
+                  shadows: isActive
+                      ? [
+                          Shadow(
+                            color: Colors.white.withValues(alpha: 0.82),
+                            blurRadius: 25,
+                          ),
+                          Shadow(
+                            color: Colors.white.withValues(alpha: 0.48),
+                            blurRadius: 44,
+                          ),
+                        ]
+                      : const [],
                 ),
                 child: isActive
                     ? _characterKaraoke(
@@ -639,49 +632,19 @@ class _LyricsScreenState extends State<LyricsScreen> {
   }
 
   Widget _background() {
-    if (widget.coverUrl == null && widget.coverPath == null) {
-      return Container(color: const Color(0xFF101010));
-    }
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        ImageFiltered(
-          imageFilter: ImageFilter.blur(sigmaX: 65, sigmaY: 65),
-          child: widget.coverPath != null
-              ? Image.file(
-                  File(widget.coverPath!),
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
-                      Container(color: const Color(0xFF101010)),
-                )
-              : Image.network(
-                  widget.coverUrl!,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
-                      Container(color: const Color(0xFF101010)),
-                ),
-        ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Colors.black.withValues(alpha: 0.42),
-                const Color(0xFF080808).withValues(alpha: 0.78),
-                Colors.black.withValues(alpha: 0.65),
-              ],
-            ),
-          ),
-        ),
-      ],
+    return _LyricsWaveBackground(
+      positionStream: widget.positionStream,
+      durationStream: widget.durationStream,
+      coverUrl: widget.coverUrl,
+      coverPath: widget.coverPath,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: 1.35,
+      child: Scaffold(
       backgroundColor: const Color(0xFF080808),
       body: Stack(
         fit: StackFit.expand,
@@ -785,6 +748,179 @@ class _LyricsScreenState extends State<LyricsScreen> {
           ),
         ],
       ),
+      ),
     );
   }
+}
+
+class _LyricsWaveBackground extends StatefulWidget {
+  const _LyricsWaveBackground({
+    required this.positionStream,
+    required this.durationStream,
+    required this.coverUrl,
+    required this.coverPath,
+  });
+
+  final Stream<Duration> positionStream;
+  final Stream<Duration?> durationStream;
+  final String? coverUrl;
+  final String? coverPath;
+
+  @override
+  State<_LyricsWaveBackground> createState() => _LyricsWaveBackgroundState();
+}
+
+class _LyricsWaveBackgroundState extends State<_LyricsWaveBackground>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2600),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: StreamBuilder<Duration>(
+        stream: widget.positionStream,
+        initialData: Duration.zero,
+        builder: (context, positionSnapshot) {
+          return StreamBuilder<Duration?>(
+            stream: widget.durationStream,
+            builder: (context, durationSnapshot) {
+              final position = positionSnapshot.data ?? Duration.zero;
+              final duration = durationSnapshot.data ?? Duration.zero;
+              final progress = duration.inMilliseconds > 0
+                  ? (position.inMilliseconds / duration.inMilliseconds)
+                      .clamp(0.0, 1.0)
+                  : 0.0;
+
+              return AnimatedBuilder(
+                animation: _animation,
+                builder: (context, child) {
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      const ColoredBox(color: Color(0xFF080808)),
+                      if (widget.coverPath != null || widget.coverUrl != null)
+                        Opacity(
+                          opacity: 0.58,
+                          child: ImageFiltered(
+                            imageFilter: ImageFilter.blur(
+                              sigmaX: 65,
+                              sigmaY: 65,
+                            ),
+                            child: widget.coverPath != null
+                                ? Image.file(
+                                    File(widget.coverPath!),
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) =>
+                                        const ColoredBox(color: Color(0xFF080808)),
+                                  )
+                                : Image.network(
+                                    widget.coverUrl!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) =>
+                                        const ColoredBox(color: Color(0xFF080808)),
+                                  ),
+                          ),
+                        ),
+                      if (progress > 0 &&
+                          (widget.coverPath != null || widget.coverUrl != null))
+                        Opacity(
+                          opacity: 0.28,
+                          child: ClipPath(
+                            clipper: _LyricsWaveClipper(
+                              progress,
+                              _animation.value * math.pi * 2,
+                            ),
+                            child: ImageFiltered(
+                              imageFilter: ImageFilter.blur(
+                                sigmaX: 42,
+                                sigmaY: 42,
+                              ),
+                              child: widget.coverPath != null
+                                  ? Image.file(
+                                      File(widget.coverPath!),
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) =>
+                                          const ColoredBox(color: Color(0xFF080808)),
+                                    )
+                                  : Image.network(
+                                      widget.coverUrl!,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) =>
+                                          const ColoredBox(color: Color(0xFF080808)),
+                                    ),
+                            ),
+                          ),
+                        ),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Color(0x66000000),
+                              Color(0xCC080808),
+                              Color(0x99000000),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _LyricsWaveClipper extends CustomClipper<Path> {
+  const _LyricsWaveClipper(this.progress, this.phase);
+
+  final double progress;
+  final double phase;
+
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    if (progress <= 0) return path;
+    if (progress >= 1) return path..addRect(Offset.zero & size);
+
+    final x = size.width * progress;
+    path
+      ..moveTo(0, 0)
+      ..lineTo(x, 0);
+
+    for (int i = 1; i <= 80; i++) {
+      final y = size.height * i / 80;
+      final wave = math.sin(y / size.height * math.pi * 2.5 + phase) * 9;
+      path.lineTo((x + wave).clamp(0.0, size.width), y);
+    }
+
+    path
+      ..lineTo(0, size.height)
+      ..close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(covariant _LyricsWaveClipper old) =>
+      old.progress != progress || old.phase != phase;
 }
