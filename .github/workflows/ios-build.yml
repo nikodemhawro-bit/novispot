@@ -104,7 +104,18 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign --build-name=2.0.0 --build-number=2
+        run: |
+          set -o pipefail
+          flutter build ios --release --no-codesign --build-name=2.0.0 --build-number=2 -v 2>&1 | tee ios-build.log
+
+      - name: Upload iOS compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Novispot-iOS-build-diagnostics
+          path: ios-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Package iOS app
         run: |
