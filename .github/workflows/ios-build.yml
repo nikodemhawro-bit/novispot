@@ -53,34 +53,44 @@ jobs:
           if not package_dirs:
               raise SystemExit("Could not find miniaudio_player 3.0.2 in PUB_CACHE")
 
-          build_script = package_dirs[0] / "rust" / "build.rs"
-          if not build_script.is_file():
-              raise SystemExit(f"Could not find Rust native build script: {build_script}")
+          package = package_dirs[0]
+          rust_builds = []
+          for candidate in package.rglob("build.rs"):
+              try:
+                  source = candidate.read_text()
+              except (OSError, UnicodeDecodeError):
+                  continue
+              if "cc::Build::new()" in source and "CARGO_CFG_TARGET_OS" in source and "build.compile(" in source:
+                  rust_builds.append((candidate, source))
 
-          source = build_script.read_text()
-          if 'build.flag("-x").flag("objective-c");' not in source:
-              if 'let target_os = std::env::var("CARGO_CFG_TARGET_OS")' not in source:
-                  raise SystemExit("Rust build script has no target_os detection; refusing an unsafe patch")
-              if "let mut build = cc::Build::new();" not in source:
-                  raise SystemExit("Rust build script does not use cc::Build; refusing an unsafe patch")
+          if len(rust_builds) != 1:
+              print("Package files (first 250):")
+              for path in sorted(p for p in package.rglob("*") if p.is_file())[:250]:
+                  print(path.relative_to(package))
+              raise SystemExit(
+                  f"Expected exactly one native cc build.rs, found {len(rust_builds)}; "
+                  "refusing to modify an unknown file"
+              )
+
+          build_script, source = rust_builds[0]
+          flag = 'build.flag("-x").flag("objective-c");'
+          if flag not in source:
               compile_at = source.rfind("build.compile(")
               if compile_at < 0:
-                  raise SystemExit("Could not locate cc::Build compile call in Rust build script")
-
+                  raise SystemExit("Could not locate native C compile call")
               patch = (
-                  '    if target_os == "ios" {\n'
-                  '        build.flag("-x").flag("objective-c");\n'
-                  '    }\n\n'
+                  '    if target_os == "ios" {\\n'
+                  f'        {flag}\\n'
+                  '    }\\n\\n'
               )
               source = source[:compile_at] + patch + source[compile_at:]
               build_script.write_text(source)
 
-          print(f"Verified iOS Objective-C compiler flag in {build_script}")
+          verified = build_script.read_text()
+          if 'if target_os == "ios"' not in verified or flag not in verified:
+              raise SystemExit("Objective-C flag verification failed")
 
-          # Fail early if the exact conditional was not inserted.
-          verify = build_script.read_text()
-          if 'if target_os == "ios"' not in verify or 'build.flag("-x").flag("objective-c");' not in verify:
-              raise SystemExit("Objective-C compiler flag verification failed")
+          print(f"Verified Objective-C compilation patch: {build_script}")
           PY
 
       - name: Analyze Dart code
