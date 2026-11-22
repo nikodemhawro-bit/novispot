@@ -46,50 +46,41 @@ jobs:
         run: |
           python3 - <<'PY'
           import os
-          import re
           from pathlib import Path
 
           cache = Path(os.environ.get("PUB_CACHE", Path.home() / ".pub-cache"))
-          candidates = list(cache.glob("hosted/pub.dev/miniaudio_player-3.0.2/**/build.dart"))
-          if not candidates:
-              raise SystemExit("Could not find miniaudio_player 3.0.2 build hook in PUB_CACHE")
+          package_dirs = list(cache.glob("hosted/pub.dev/miniaudio_player-3.0.2"))
+          if not package_dirs:
+              raise SystemExit("Could not find miniaudio_player 3.0.2 in PUB_CACHE")
 
-          hook = next((p for p in candidates if "CBuilder.library(" in p.read_text()), None)
-          if hook is None:
-              raise SystemExit("miniaudio_player 3.0.2 build hook has no CBuilder.library; refusing an unsafe patch")
+          build_script = package_dirs[0] / "rust" / "build.rs"
+          if not build_script.is_file():
+              raise SystemExit(f"Could not find Rust native build script: {build_script}")
 
-          source = hook.read_text()
-          start = source.index("CBuilder.library(")
-          end = source.find("\n      );", start)
-          if end == -1:
-              end = source.find("\n    );", start)
-          if end == -1:
-              raise SystemExit("Could not locate the CBuilder.library argument block")
+          source = build_script.read_text()
+          if 'build.flag("-x").flag("objective-c");' not in source:
+              if 'let target_os = std::env::var("CARGO_CFG_TARGET_OS")' not in source:
+                  raise SystemExit("Rust build script has no target_os detection; refusing an unsafe patch")
+              if "let mut build = cc::Build::new();" not in source:
+                  raise SystemExit("Rust build script does not use cc::Build; refusing an unsafe patch")
+              compile_at = source.rfind("build.compile(")
+              if compile_at < 0:
+                  raise SystemExit("Could not locate cc::Build compile call in Rust build script")
 
-          block = source[start:end]
-          lang = re.search(r"(?m)^(\s*)language:\s*([^,\n]+),", block)
-          if lang is None:
-              raise SystemExit("Could not locate the CBuilder language setting")
+              patch = (
+                  '    if target_os == "ios" {\n'
+                  '        build.flag("-x").flag("objective-c");\n'
+                  '    }\n\n'
+              )
+              source = source[:compile_at] + patch + source[compile_at:]
+              build_script.write_text(source)
 
-          indent = lang.group(1)
-          block = block[:lang.start()] + (
-              f"{indent}language: targetOS == OS.iOS ? Language.objectiveC : Language.c,"
-          ) + block[lang.end():]
+          print(f"Verified iOS Objective-C compiler flag in {build_script}")
 
-          if not re.search(r"(?m)^\s*flags\s*:", block):
-              marker = re.search(r"(?m)^(\s*)language:.*,$", block)
-              insert_at = marker.end()
-              block = block[:insert_at] + (
-                  "\n" + indent + "flags: ["
-                  "\n" + indent + "  if (targetOS == OS.iOS) ...["
-                  "\n" + indent + "    '-x',"
-                  "\n" + indent + "    'objective-c',"
-                  "\n" + indent + "  ],"
-                  "\n" + indent + "],"
-              ) + block[insert_at:]
-
-          hook.write_text(source[:start] + block + source[end:])
-          print(f"Patched {hook} for iOS Objective-C compilation")
+          # Fail early if the exact conditional was not inserted.
+          verify = build_script.read_text()
+          if 'if target_os == "ios"' not in verify or 'build.flag("-x").flag("objective-c");' not in verify:
+              raise SystemExit("Objective-C compiler flag verification failed")
           PY
 
       - name: Analyze Dart code
